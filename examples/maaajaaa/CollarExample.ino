@@ -274,13 +274,11 @@ void displayBatteryStatus(){
   if(millis() - previousMillisBatteryUpdate >= 2000){
     pixels.clear();
     pixels.setPixelColor(0, 2, 0, 0);
-    for (int i = (NUMPIXELS-1) * battery.getPercentage()/100.0; i > 0; i--) {
-      //don't overrun in case we measure a voltage about our expected maximum voltage
-      if(i>NUMPIXELS-1){
-        i = NUMPIXELS-1;
+    int chargeStatusInLEDs = (NUMPIXELS-1) * battery.getPercentage()/100.0;
+    if(chargeStatusInLEDs>NUMPIXELS-1){
+        chargeStatusInLEDs = NUMPIXELS-1;
       }
-      pixels.setPixelColor(i, 2, 0, 0);
-    }
+    pixels.setPixelColor(chargeStatusInLEDs, 2, 0, 0);
     pixels.show();  
   }  
 }
@@ -658,8 +656,9 @@ void updateBatteryLevel(bool showAnimation = false) {
   battery.updateADCReading();
   //if update on BLE characteristics is due, run that
   if(millis()- previousMillisBatteryUpdate >= 2000){
-
-    displayBatteryStatus();
+    if(showAnimation){
+      displayBatteryStatus();
+    }
     previousMillisBatteryUpdate = millis();
     if(BLE.central().connected()){
       String batteryString;
