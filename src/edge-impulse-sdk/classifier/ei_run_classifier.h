@@ -676,7 +676,7 @@ int process_mfcc_maaajaaa(ei_impulse_handle_t *handle,
         out_features_index = 0;
         // iterate over our one dsp block
         ei_model_dsp_t block = impulse->dsp_blocks[0];
-        matrix_ptrs[0] = std::unique_ptr<ei::matrix_t>(new ei::matrix_t(1, block.n_output_features));
+        //matrix_ptrs[0] = std::unique_ptr<ei::matrix_t>(new ei::matrix_t(1, block.n_output_features));
 
         /* copy the data over into our output matrix */
         for (size_t m_ix = 0; m_ix < block.n_output_features; m_ix++) {
@@ -711,7 +711,7 @@ int process_mfcc_maaajaaa(ei_impulse_handle_t *handle,
         }
         //handle->state.reset();
         ei_impulse_result_t result = {0};
-        delete[] matrix_ptrs;
+        //delete[] matrix_ptrs;
     }else{
         ei_printf("WARNING classifier not continuous");
     }

@@ -150,7 +150,7 @@ const ei_impulse_t impulse_409114_0 = {
 
     .sensor = EI_CLASSIFIER_SENSOR_MICROPHONE,
     .fusion_string = "audio",
-    .slice_size = (533/1),
+    .slice_size = (800/1),
     .slices_per_model_window = 1,
 
     .has_anomaly = EI_ANOMALY_TYPE_UNKNOWN,
