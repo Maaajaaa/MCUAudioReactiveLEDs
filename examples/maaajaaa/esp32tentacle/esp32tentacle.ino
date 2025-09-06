@@ -82,12 +82,16 @@ ei::matrix_t outputMatrix(1, EI_CLASSIFIER_NN_INPUT_FRAME_SIZE);
 
 
 /* NEOPIXEL STUFF -----------------------------------------------------------------*/
-#include <Adafruit_NeoPixel.h>
+#include <NeoPixelBus.h>
 
-#define NUMPIXELS 135// 23 + 19 + 17 + 23 + 21 + 23 + 5 + 3 //+1 because needs to be uneven  // limited because the neopixel writing is rather slow, needs to be threaded
+
+#define NUMPIXELS 135//135// 23+ 17+ 13+ 20+ 23+ 17+ 19+ 3
+int tentacles[] = { 23, 17, 13, 20, 23, 17, 19, 3};
+int numTentacles = 8;
 //needs to be divisable by 2 with remainder 1
 #define PIN_NEO_PIXEL 2  // for some reason the pin mapping does not exaxtly match that printed
-Adafruit_NeoPixel pixels(NUMPIXELS, PIN_NEO_PIXEL, NEO_GRB + NEO_KHZ800);
+NeoPixelBus<NeoGrbFeature, NeoEsp32I2s0Ws2812xMethod> strip(NUMPIXELS, PIN_NEO_PIXEL);
+
 
 
 /* GRAPH PLOTTING (no Arduino IDE and cutecom support, only puttY confimred so far)--------------------------------------*/
@@ -99,6 +103,8 @@ int graphMaxLength = 100.0;
 #define LINE_CASCADING 2
 #define SYMMETRIC_CASCADING 3
 #define SINGLE_CEPTRUM 1
+#define INDIVIDUAL_TENTS_CASCADING 4
+#define INDIVIDUAL_TENTS_BAR 5
 int ceptrumToShow = 0;
 
 /* Low-Pass Filter Constants --------------------------------------------------- */
@@ -139,14 +145,14 @@ int gain = 128;
 int gainHysteresis = 20;
 
 float inputScalar = 0.6;
-float inputScalarHysteresis = 0.2;
+float inputScalarHysteresis = 0.4;
 float inputScalarMin = 0.5;
-float inputScalarMax = 4.0;
+float inputScalarMax = 8.0;
 
 
 int numCycles = 0;
 
-int outputMode = SYMMETRIC_CASCADING;
+int outputMode = INDIVIDUAL_TENTS_BAR;//SYMMETRIC_CASCADING;
 
 struct RGBColour {
   uint8_t r;
@@ -165,8 +171,8 @@ void updateBatteryLevel(bool);
  */
 void setup() {
 
-  pixels.begin();
-  pixels.setBrightness(255);
+  strip.Begin();
+  strip.Show();
   // put your setup code here, to run once:
   Serial.begin(115200);
   //don't normally wait for serial
@@ -177,9 +183,10 @@ void setup() {
   if (NUMPIXELS % 2 != 1 && outputMode == SYMMETRIC_CASCADING) {
     //turn strip red
     for (int i = NUMPIXELS; i > 0; i--) {
-      pixels.setPixelColor(i, 255, 0, 0);
+      RgbColor redColor(255, 0, 0);
+      strip.SetPixelColor(i, redColor);
     }
-    pixels.show();
+    strip.Show();
     //wait for serial
     while (!Serial)
       ;
@@ -189,20 +196,52 @@ void setup() {
       delay(2000);
     }
   }
-  pixels.setPixelColor(1, 0, 0, 255);
+  
+  RgbColor testColor(128, 0, 128);
+  strip.SetPixelColor(1, testColor);
   for (int j = 0; j < NUMPIXELS; j++) {
     for (int i = NUMPIXELS; i > 0; i--) {
-      pixels.setPixelColor(i, pixels.getPixelColor(i - 1));
+      strip.SetPixelColor(i, testColor);
     }
-    pixels.show();
-    delay(50);
+    strip.Show();
+    delay(10);
+  }
+  strip.ClearTo(RgbColor(0,0,0));
+  RgbColor evenTent(128, 0, 0);
+  RgbColor oddTent(0, 128, 0);
+  int index = 0;
+  for(int i = 0; i < numTentacles; i ++){
+    for(int j = 0; j < tentacles[i]; j++){
+      if(i % 8 == 0){
+        strip.SetPixelColor(index, RgbColor(255,0,0));
+      }else if(i % 8 == 1){
+        strip.SetPixelColor(index, RgbColor(0,255,0));
+      }else if(i % 8 == 2){
+        strip.SetPixelColor(index, RgbColor(0,0,255));
+      }else if(i % 8 == 3){
+        strip.SetPixelColor(index, RgbColor(255,255,0));
+      }else if(i % 8 == 4){
+        strip.SetPixelColor(index, RgbColor(0,255,255));
+      }else if(i % 8 == 5){
+        strip.SetPixelColor(index, RgbColor(255,0,255));
+      }else if(i % 8 == 6){
+        strip.SetPixelColor(index, RgbColor(255,0,0));
+      }else if(i % 8 == 7){
+        strip.SetPixelColor(index, RgbColor(128,0,255));
+      }
+      index ++;
+    }
   }
 
-  pixels.clear();
-
+  strip.Show();
+  delay(5 * 1000); 
+  strip.ClearTo(RgbColor(0,0,0));
 
   //calculate kernel for gaussian filter
-  gaussianFilter.begin(SIGMA_FINAL_GAUSSIAN);
+  if(gaussianFilter.begin(SIGMA_FINAL_GAUSSIAN) != 0){
+    Serial.println("Gaussian init FAILED!");
+  }
+  
 
   Serial.println("Edge Impulse Inferencing Demo");
 
@@ -255,6 +294,8 @@ void displayAnimation() {
   double bMax = -100.0;
   int bMaxIndex = -1;
 
+  double maxOf4s[numTentacles] = {-100.0};
+
   //relevant buffer area where the mfcc output is stored
   int relevantBuferCols = mfe_buffer_size.cols;
 
@@ -275,6 +316,9 @@ void displayAnimation() {
     //Serial.print("output: ");
   }
   for (int i = 0; i < relevantBuferCols; i++) {
+    if(outputMatrix.buffer[i] > maxOf4s[i%8]){
+      maxOf4s[i%8] = outputMatrix.buffer[i];
+    }
     //find maxima of the thrids of the spectrum
     if (i < firstThird) {
       if (outputMatrix.buffer[i] > rMax) {
@@ -308,9 +352,11 @@ void displayAnimation() {
     if (i == ceptrumToShow && outputMode == SINGLE_CEPTRUM) {
       for (int j = 0; j < NUMPIXELS; j++) {
         if (j <= round(NUMPIXELS * outputMatrix.buffer[i])) {
-          pixels.setPixelColor(j, 255, 0, 0);
+          strip.SetPixelColor(j,RgbColor(255, 0, 0));
+          //pixels.setPixelColor(j, 255, 0, 0);
         } else {
-          pixels.setPixelColor(j, 0, 0, 0);
+          strip.SetPixelColor(j,RgbColor(0, 0, 0));
+          //pixels.setPixelColor(j, 0, 0, 0);
         }
       }
     }
@@ -328,6 +374,14 @@ void displayAnimation() {
   int rNew = pow(rMax, 2) * inputScalar;
   int gNew = pow(gMax, 2) * inputScalar;
   int bNew = pow(bMax, 2) * inputScalar;
+  int tentacleNew[numTentacles] = {0};
+  for(int i = 0; i < numTentacles; i++){
+    tentacleNew[i] = (float) maxOf4s[i] * inputScalar;
+    Serial.print("Tentacle ");
+    Serial.print(i);
+    Serial.print(" value");
+    Serial.println(tentacleNew[i]);
+  }
 
   if (rMax < 0.4) {
     rNew = 0;
@@ -376,7 +430,7 @@ void displayAnimation() {
       break;
 
     case SYMMETRIC_CASCADING:
-
+    {
       int centerPixel = NUMPIXELS / 2 + 1;
       //center to left cascading
       for (int i = NUMPIXELS; i > centerPixel; i--) {
@@ -389,6 +443,81 @@ void displayAnimation() {
       //set center pixel
       pixelArray[centerPixel] = { rNew, gNew, bNew };
       break;
+    }
+
+    case INDIVIDUAL_TENTS_CASCADING:
+    {
+      int index = 0;
+      for(int t = 0; t < numTentacles; t++){
+        int numPix = tentacles[t];
+        int centerPixel = numPix / 2 + 1;
+        //center to left cascading
+        for (int i = numPix; i > centerPixel; i--) {
+          pixelArray[index+i] = pixelArray[index+i - 1];
+        }
+        //right to center cascading
+        for (int i = 0; i < numPix; i++) {
+          pixelArray[index+i] = pixelArray[index+i + 1];
+        }
+        //set center pixel
+        pixelArray[index+centerPixel] = { rNew, gNew, bNew };
+        index += numPix;
+      }      
+      break;
+    }
+    case INDIVIDUAL_TENTS_BAR:
+    {
+      int index = 0;
+      for(int t = 0; t < numTentacles; t++){
+        RgbColor tColor(255,0,0);
+        if(t % 8 == 0){
+          tColor = RgbColor(255,0,0);
+        }else if(t % 8 == 1){
+          tColor = RgbColor(0,255,0);
+        }else if(t % 8 == 2){
+          tColor = RgbColor(0,0,255);
+        }else if(t % 8 == 3){
+          tColor = RgbColor(255,255,0);
+        }else if(t % 8 == 4){
+          tColor = RgbColor(0,255,255);
+        }else if(t % 8 == 5){
+          tColor = RgbColor(255,0,255);
+        }else if(t % 8 == 6){
+          tColor = RgbColor(255,0,0);
+        }else{
+          tColor = RgbColor(128,128,128);
+        }
+        int numPix = tentacles[t];
+        int centerPixel = numPix / 2 + 1;
+        //first scale to 0 - 1 scale, then size for half a tentacle
+        float absolutePower = (float) tentacleNew[t] / minimumAverage;
+        float relativePower =  absolutePower * ((numPix-1)/2);
+        int i = 0;
+        while(i < numPix){
+
+          if(i-numPix == 1){
+            //last Pixel on an odd-numbered strip
+            if(i <= relativePower){
+              pixelArray[index + i] = {tColor[ColorIndexR], tColor[ColorIndexG], tColor[ColorIndexB]};
+            }else{
+              pixelArray[index + i] = {0, 0, 0};
+            }
+            i += 1;
+          }else{
+            if(i <= relativePower){
+              pixelArray[index + i] = {tColor[ColorIndexR], tColor[ColorIndexG], tColor[ColorIndexB]};
+              pixelArray[index + numPix - i] = {tColor[ColorIndexR], tColor[ColorIndexG], tColor[ColorIndexB]};
+            }else{
+              pixelArray[index + i] = {0, 0, 0};
+              pixelArray[index + numPix - i] = {0, 0, 0};
+            }
+            i += 2;
+          }
+        }
+        index += numPix;
+      }
+      break;
+    }
   }
   //apply filter and apply array to pixels
   //caching arrays to use 3 separate 1d gaussian blur fliters
@@ -410,15 +539,16 @@ void displayAnimation() {
   //gaussianFilter.filter(blues, NUMPIXELS);
 
   for (int i = 0; i < NUMPIXELS; i++) {
-    pixels.setPixelColor(i, reds[i], greens[i], blues[i]);
-  }
 
-  pixels.show();  // Send the updated pixel colors to the hardware.
+    strip.SetPixelColor(i,RgbColor(reds[i], greens[i],  blues[i]));
+  }
+  
+  // Send the updated pixel colors to the hardware.
+  strip.Show();
 
   /*------------gain adjustment--------------------------------------*/
   //add new values to rolling average
-
-  //updateRollingAverage(sqrt(rNew*rNew + gNew*gNew + bNew*bNew));
+  updateRollingAverage(sqrt(rNew*rNew + gNew*gNew + bNew*bNew));
 
   /*Serial.print("Rolling average: ");
   Serial.print(rollingPeakAvg);
@@ -427,28 +557,23 @@ void displayAnimation() {
   Serial.print(" inputScalar: ");
   Serial.println(inputScalar);*/
   if (rollingPeakAvg < minimumAverage) {
-    gain += gainHysteresis;
-    if (gain > maxGain) {
-      gain = maxGain;
-      inputScalar += inputScalarHysteresis;
-      if (inputScalar > inputScalarMax) {
-        inputScalar = inputScalarMax;
-      }
+    inputScalar += inputScalarHysteresis;
+    if (inputScalar > inputScalarMax) {
+      inputScalar = inputScalarMax;
     }
-    Serial.print("increasing gain to: ");
-    Serial.println(gain);
+    Serial.print("increasing sclae to: ");
+    Serial.println(inputScalar);
     //reset avg to take some time for adjustment
     rollingPeakAvg = 128.0;
   }
 
   if (rollingPeakAvg > maximumAverage) {
-    gain -= gainHysteresis;
-    if (gain < minGain) {
-      gain = minGain;
+    inputScalar -= inputScalarHysteresis;
+    if (inputScalar < inputScalarMin) {
       inputScalar = inputScalarMin;
     }
-    Serial.print("decreasing gain to: ");
-    Serial.println(gain);
+    Serial.print("decreasing scalar to: ");
+    Serial.println(inputScalar);
     //reset avg to take some time for adjustment
     rollingPeakAvg = 128.0;
   }
