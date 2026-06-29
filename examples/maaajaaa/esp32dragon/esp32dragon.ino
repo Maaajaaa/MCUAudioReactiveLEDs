@@ -529,7 +529,7 @@ void displayAnimation() {
   float blues[NUMPIXELS];
   for (int i = 0; i < NUMPIXELS; i++) {
     //apply low pass filter
-    RGBColour filteredCol = lowPassFilterRGB(pixelArray[i], pixelArrayOld[i]);
+    RGBColour filteredCol = pixelArray[i];//lowPassFilterRGB(pixelArray[i], pixelArrayOld[i]);
     reds[i] = filteredCol.r;
     greens[i] = filteredCol.g;
     blues[i] = filteredCol.b;
