@@ -19,7 +19,7 @@
 
 // Undefine min/max macros as these conflict with C++ std min/max functions
 // these are often included by Arduino cores
-#include <Arduino.h>
+//#include <Arduino.h>
 #include <stdarg.h>
 #ifdef min
 #undef min
