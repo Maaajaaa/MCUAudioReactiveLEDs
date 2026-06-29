@@ -85,12 +85,12 @@ ei::matrix_t outputMatrix(1, EI_CLASSIFIER_NN_INPUT_FRAME_SIZE);
 #include <NeoPixelBus.h>
 
 
-#define NUMPIXELS 135//135// 23+ 17+ 13+ 20+ 23+ 17+ 19+ 3
+#define NUMPIXELS 27//135// 23+ 17+ 13+ 20+ 23+ 17+ 19+ 3
 int tentacles[] = { 23, 17, 13, 20, 23, 17, 19, 3};
 int numTentacles = 8;
 //needs to be divisable by 2 with remainder 1
-#define PIN_NEO_PIXEL 2  // for some reason the pin mapping does not exaxtly match that printed
-NeoPixelBus<NeoGrbFeature, NeoEsp32I2s0Ws2812xMethod> strip(NUMPIXELS, PIN_NEO_PIXEL);
+#define PIN_NEO_PIXEL 4  // for some reason the pin mapping does not exaxtly match that printed
+NeoPixelBus<NeoRgbwFeature, NeoEsp32I2s0Sk6812Method> strip(NUMPIXELS, PIN_NEO_PIXEL);
 
 
 
@@ -99,7 +99,7 @@ bool printGraph = false;
 int nonPrintCycles = 0;
 int printEvery = 30;
 int graphMaxLength = 100.0;
-
+///TODO: ENUM this
 #define LINE_CASCADING 2
 #define SYMMETRIC_CASCADING 3
 #define SINGLE_CEPTRUM 1
@@ -152,7 +152,7 @@ float inputScalarMax = 8.0;
 
 int numCycles = 0;
 
-int outputMode = INDIVIDUAL_TENTS_BAR;//SYMMETRIC_CASCADING;
+int outputMode = SYMMETRIC_CASCADING; //INDIVIDUAL_TENTS_BAR;
 
 struct RGBColour {
   uint8_t r;
@@ -297,11 +297,11 @@ void displayAnimation() {
   double maxOf4s[numTentacles] = {-100.0};
 
   //relevant buffer area where the mfcc output is stored
-  int relevantBuferCols = mfe_buffer_size.cols;
+  int relevantBuferCols = 13;//mfe_buffer_size.cols;
 
   int firstThird, secondThird;
-  firstThird = 3;
-  secondThird = 5;
+  firstThird = 1;
+  secondThird = 3;
 
 
   //print graph, can't be viewed in arduino viewer, but putty or cutecom do support the clear screen command
@@ -372,15 +372,18 @@ void displayAnimation() {
 
   //calculate new 8-bit rbg values, assuming mfcc output is normed to 0..1
   int rNew = pow(rMax, 2) * inputScalar;
-  int gNew = pow(gMax, 2) * inputScalar;
+  int gNew = abs(gMax) * inputScalar;
   int bNew = pow(bMax, 2) * inputScalar;
   int tentacleNew[numTentacles] = {0};
-  for(int i = 0; i < numTentacles; i++){
-    tentacleNew[i] = (float) maxOf4s[i] * inputScalar;
-    Serial.print("Tentacle ");
-    Serial.print(i);
-    Serial.print(" value");
-    Serial.println(tentacleNew[i]);
+  if(outputMode == INDIVIDUAL_TENTS_BAR || outputMode == INDIVIDUAL_TENTS_CASCADING){
+    int tentacleNew[numTentacles] = {0};
+    for(int i = 0; i < numTentacles; i++){
+      tentacleNew[i] = (float) maxOf4s[i] * inputScalar;
+      Serial.print("Tentacle ");
+      Serial.print(i);
+      Serial.print(" value");
+      Serial.println(tentacleNew[i]);
+    } 
   }
 
   if (rMax < 0.4) {

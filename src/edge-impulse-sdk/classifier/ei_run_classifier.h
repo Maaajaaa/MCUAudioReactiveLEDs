@@ -700,8 +700,40 @@ int process_mfcc_maaajaaa(ei_impulse_handle_t *handle,
         timing_dsp_us += ei_read_timer_us() - dsp_start_us;
         int timing_dsp = (int)(timing_dsp_us / 1000);
 
+        //here's what we actually want, the filtered output of extract_fn_slice
+            // calculate the size of the spectrogram matrix
 
-        ei_printf("\r\nFeatures (%d ms.): ", timing_dsp);
+        ei_dsp_config_mfcc_t config = *((ei_dsp_config_mfcc_t*)block.config);
+        int implementation_version = config.implementation_version;
+        // for continuous use v2 stack frame calculations
+        if (implementation_version == 1) {
+            implementation_version = 2;
+        }
+        //re-calculate the size and locations where the MFCC output should be
+        matrix_size_t out_matrix_size =
+        speechpy::feature::calculate_mfcc_buffer_size(
+            signal->total_length, impulse->frequency, config.frame_length, config.frame_stride, config.num_cepstral,
+            implementation_version);
+
+        size_t output_matrix_offset = (static_features_matrix.rows * static_features_matrix.cols) -
+        (out_matrix_size.rows * out_matrix_size.cols);
+        for (size_t m_ix = 0; m_ix < (out_matrix_size.rows * out_matrix_size.cols); m_ix++) {
+            output_matrix->buffer[m_ix] = static_features_matrix.buffer[output_matrix_offset + m_ix];
+        }
+
+        //ei_printf("\r\n\nnumber of ceptra: %i, number of samples of MFCC: %i\n", config.num_cepstral, out_matrix_size.rows);
+        ei_printf("\nFeatures (%d ms.): ", timing_dsp);
+        for(int i = 0; i < config.num_cepstral; i++){
+                ei_printf("%5.2f ", output_matrix->buffer[i]);
+        }
+        //second row
+        if(out_matrix_size.rows >= 2){
+            ei_printf("\nFeatures2:        ");
+            for(int i = 0; i < config.num_cepstral; i++){
+                    ei_printf("%5.2f ", output_matrix->buffer[config.num_cepstral+i]);
+            }
+        }
+
         if(debug){
             ei_printf("number of filtered features: %i rows: %i", output_matrix->cols,  output_matrix->rows);
             for (size_t ix = 0; ix < output_matrix->cols; ix++) {
