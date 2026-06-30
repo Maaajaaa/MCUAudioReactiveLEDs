@@ -587,82 +587,78 @@ extern "C" EI_IMPULSE_ERROR process_impulse_continuous(ei_impulse_handle_t *hand
  *
  * @return     The ei impulse error.
  */
-int process_mfcc_maaajaaa(ei_impulse_handle_t *handle,
+int process_mfe_maaajaaa(ei_impulse_handle_t *handle,
                                             signal_t *signal,
                                             ei::matrix_t *output_matrix,
                                             bool debug,
                                             bool enable_maf)
 {
     auto impulse = handle->impulse;
-    static ei::matrix_t static_features_matrix(1, impulse->nn_input_frame_size);
-    if (!static_features_matrix.buffer) {
-        return EI_IMPULSE_ALLOC_FAILED;
-    }
+    // static ei::matrix_t static_features_matrix(1, impulse->nn_input_frame_size);
+    // if (!static_features_matrix.buffer) {
+    //     return EI_IMPULSE_ALLOC_FAILED;
+    // }
 
     //memset(output_matrix, 0, sizeof(ei::matrix_t));
 
     uint64_t dsp_start_us = ei_read_timer_us();
     uint64_t timing_dsp_us = 0;
 
-    size_t out_features_index = 0;
 
-    for (size_t ix = 0; ix < impulse->dsp_blocks_size; ix++) {
-        ei_model_dsp_t block = impulse->dsp_blocks[ix];
+    ei_model_dsp_t block = impulse->dsp_blocks[0];
 
-        if (out_features_index + block.n_output_features > impulse->nn_input_frame_size) {
-            ei_printf("ERR: Would write outside feature buffer\n");
-            return EI_IMPULSE_DSP_ERROR;
-        }
+    if (block.n_output_features > impulse->nn_input_frame_size) {
+        ei_printf("ERR: Would write outside feature buffer\n");
+        return EI_IMPULSE_DSP_ERROR;
+    }
 
-        ei::matrix_t fm(1, block.n_output_features,
-                        static_features_matrix.buffer + out_features_index);
+    ei::matrix_t fm(1, block.n_output_features, output_matrix->buffer);
 
-        int (*extract_fn_slice)(ei::signal_t *signal, ei::matrix_t *output_matrix, void *config, const float frequency, matrix_size_t *out_matrix_size);
+    int (*extract_fn_slice)(ei::signal_t *signal, ei::matrix_t *output_matrix, void *config, const float frequency, matrix_size_t *out_matrix_size);
 
-        /* Switch to the slice version of the mfcc feature extract function */
-        if (block.extract_fn == extract_mfcc_features) {
-            extract_fn_slice = &extract_mfcc_per_slice_features;
-        }
-        else {
-            ei_printf("ERR: Unknown extract function, only MFCC, MFE and spectrogram supported\n");
-            return EI_IMPULSE_DSP_ERROR;
-        }
+    /* Switch to the slice version of the mfE feature extract function */
+    if (block.extract_fn == extract_mfe_features) {
+        //extract_fn_slice = &extract_mfcc_per_slice_features;
+        extract_fn_slice = &extract_mfe_per_slice_features;
+    }
+    else {
+        ei_printf("ERR: Unknown extract function, only MFCC, MFE and spectrogram supported\n");
+        return EI_IMPULSE_DSP_ERROR;
+    }
 
-        matrix_size_t features_written;
+    matrix_size_t features_written;
 
 #if EIDSP_SIGNAL_C_FN_POINTER
-        if (block.axes_size != impulse->raw_samples_per_frame) {
-            ei_printf("ERR: EIDSP_SIGNAL_C_FN_POINTER can only be used when all axes are selected for DSP blocks\n");
-            return EI_IMPULSE_DSP_ERROR;
-        }
-        int ret = extract_fn_slice(signal, &fm, block.config, impulse->frequency, &features_written);
+    if (block.axes_size != impulse->raw_samples_per_frame) {
+        ei_printf("ERR: EIDSP_SIGNAL_C_FN_POINTER can only be used when all axes are selected for DSP blocks\n");
+        return EI_IMPULSE_DSP_ERROR;
+    }
+    int ret = extract_fn_slice(signal, &fm, block.config, impulse->frequency, &features_written);
 #else
-        SignalWithAxes swa(signal, block.axes, block.axes_size, impulse);
-        int ret = extract_fn_slice(swa.get_signal(), &fm, block.config, impulse->frequency, &features_written);
+    SignalWithAxes swa(signal, block.axes, block.axes_size, impulse);
+    
+    int ret = extract_fn_slice(swa.get_signal(), &fm, block.config, impulse->frequency, &features_written);
 #endif
 
-        if (ret != EIDSP_OK) {
-            ei_printf("ERR: Failed to run DSP process (%d)\n", ret);
-            return EI_IMPULSE_DSP_ERROR;
-        }
-
-        if (ei_run_impulse_check_canceled() == EI_IMPULSE_CANCELED) {
-            return EI_IMPULSE_CANCELED;
-        }
-
-        classifier_continuous_features_written += (features_written.rows * features_written.cols);
-
-        out_features_index += block.n_output_features;
+    if (ret != EIDSP_OK) {
+        ei_printf("ERR: Failed to run DSP process maaajaaa (%d)\n", ret);
+        return EI_IMPULSE_DSP_ERROR;
     }
+
+    if (ei_run_impulse_check_canceled() == EI_IMPULSE_CANCELED) {
+        return EI_IMPULSE_CANCELED;
+    }
+
+    classifier_continuous_features_written += (features_written.rows * features_written.cols);
 
     timing_dsp_us = ei_read_timer_us() - dsp_start_us;
     int timing_dsp = (int)(timing_dsp_us / 1000);
 
     if (debug) {
-        ei_printf("number of features: %i rows: %i", static_features_matrix.cols, static_features_matrix.rows);
+        ei_printf("number of features: %i rows: %i", output_matrix->cols, output_matrix->rows);
         ei_printf("\r\nFeatures (%d ms.): ", timing_dsp);
-        for (size_t ix = 0; ix < static_features_matrix.cols; ix++) {
-            ei_printf_float(static_features_matrix.buffer[ix]);
+        for (size_t ix = 0; ix < output_matrix->cols; ix++) {
+            ei_printf_float(output_matrix->buffer[ix]);
             ei_printf(" ");
         }
         ei_printf("\n");
@@ -671,52 +667,41 @@ int process_mfcc_maaajaaa(ei_impulse_handle_t *handle,
     if (classifier_continuous_features_written >= impulse->nn_input_frame_size) {
         dsp_start_us = ei_read_timer_us();
 
-        //uint32_t block_num = impulse->dsp_blocks_size + impulse->learning_blocks_size
-
-        out_features_index = 0;
-        // iterate over our one dsp block
+        // run our one dsp block
         ei_model_dsp_t block = impulse->dsp_blocks[0];
         //matrix_ptrs[0] = std::unique_ptr<ei::matrix_t>(new ei::matrix_t(1, block.n_output_features));
 
-        /* copy the data over into our output matrix */
-        for (size_t m_ix = 0; m_ix < block.n_output_features; m_ix++) {
-            output_matrix->buffer[m_ix] = static_features_matrix.buffer[out_features_index + m_ix];
-        }
-
-        if (block.extract_fn == extract_mfcc_features) {
-            //this is what's running
-            calc_cepstral_mean_and_var_normalization_mfcc(output_matrix, block.config);
-        }
-        else if (block.extract_fn == extract_spectrogram_features) {
-            calc_cepstral_mean_and_var_normalization_spectrogram(output_matrix, block.config);
-        }
-        else if (block.extract_fn == extract_mfe_features) {
-            calc_cepstral_mean_and_var_normalization_mfe(output_matrix, block.config);
+        if (block.extract_fn == extract_mfe_features) {
+            //this seems to just do noise floor adjustments, and those aren't needed
+            //calc_cepstral_mean_and_var_normalization_mfe(output_matrix, block.config);
         }else{
             ei_printf("ERROR invalid block.extract_fn");
         }
-        out_features_index += block.n_output_features;
 
+        /* copy the data over into our output matrix */
+        for (size_t m_ix = 0; m_ix < block.n_output_features; m_ix++) {
+            //output_matrix->buffer[m_ix] = output_matrix->buffer[m_ix];
+        }
         timing_dsp_us += ei_read_timer_us() - dsp_start_us;
         int timing_dsp = (int)(timing_dsp_us / 1000);
 
-
-        ei_printf("\r\nFeatures (%d ms.): ", timing_dsp);
+        ei_printf("\nFeatures (%d ms.): ", timing_dsp);
         if(debug){
-            ei_printf("number of filtered features: %i rows: %i", output_matrix->cols,  output_matrix->rows);
+            ei_printf("number of filtered features: %i rows: %i data: ", output_matrix->cols,  output_matrix->rows);
             for (size_t ix = 0; ix < output_matrix->cols; ix++) {
                 ei_printf_float( output_matrix->buffer[ix]);
                 ei_printf(" ");
             }
         }
+
+        ei_printf("number of filtered features: %i rows: %i", features_written.cols,  features_written.rows);
+
         //handle->state.reset();
         ei_impulse_result_t result = {0};
         //delete[] matrix_ptrs;
     }else{
         ei_printf("WARNING classifier not continuous");
     }
-
-
 
     return 1;
 }
@@ -985,14 +970,14 @@ extern "C" EI_IMPULSE_ERROR run_classifier_continuous(
  *
  * @return     The ei impulse error.
  */
-int run_mfcc_maaajaaa(
+int run_mfe_maaajaaa(
     signal_t *signal,
     ei::matrix_t *output_matrix,
     bool debug = false,
     bool enable_maf = true)
 {
     auto& impulse = ei_default_impulse;
-    return process_mfcc_maaajaaa(&impulse, signal, output_matrix, debug, enable_maf);
+    return process_mfe_maaajaaa(&impulse, signal, output_matrix, debug, enable_maf);
 }
 
 

@@ -85,11 +85,11 @@ ei::matrix_t outputMatrix(1, EI_CLASSIFIER_NN_INPUT_FRAME_SIZE);
 #include <NeoPixelBus.h>
 
 
+//needs to be divisable by 2 with remainder 1 for symmetric cascading
 #define NUMPIXELS 27//135// 23+ 17+ 13+ 20+ 23+ 17+ 19+ 3
 int tentacles[] = { 23, 17, 13, 20, 23, 17, 19, 3};
 int numTentacles = 8;
-//needs to be divisable by 2 with remainder 1
-#define PIN_NEO_PIXEL 4  // for some reason the pin mapping does not exaxtly match that printed
+#define PIN_NEO_PIXEL 4  //pin 2 can cause issues with some voltage converter boards (esp won't go into flashing mode) (maybe a small pull down resistor would mitigate this)
 NeoPixelBus<NeoRgbwFeature, NeoEsp32I2s0Sk6812Method> strip(NUMPIXELS, PIN_NEO_PIXEL);
 
 
@@ -144,7 +144,7 @@ float maximumAverage = 150.0;
 int gain = 128;
 int gainHysteresis = 20;
 
-float inputScalar = 0.6;
+double inputScalar = 0.6;
 float inputScalarHysteresis = 0.4;
 float inputScalarMin = 0.5;
 float inputScalarMax = 8.0;
@@ -285,7 +285,7 @@ void displayAnimation() {
   if (!outputMatrix.buffer) {
     ei_printf("allocation of output matrix failed\n");
   }
-  run_mfcc_maaajaaa(&signal, &outputMatrix, debug_nn);
+  run_mfe_maaajaaa(&signal, &outputMatrix, debug_nn);
 
   double rMax = -100.0;
   int rMaxIndex = -1;
@@ -315,7 +315,10 @@ void displayAnimation() {
   if (!printGraph) {
     //Serial.print("output: ");
   }
-  for (int i = 0; i < relevantBuferCols; i++) {
+  //intersting output is at the end of the matrix, see ei_run_dsp.h:833
+  if(debug_arduino_filtering) Serial.print("\n\nData: ");
+  for (int i = mfe_buffer_size.cols-relevantBuferCols; i < mfe_buffer_size.cols; i++) {
+    if(debug_arduino_filtering) Serial.printf("%5.2f ", log(outputMatrix.buffer[i]));
     if(outputMatrix.buffer[i] > maxOf4s[i%8]){
       maxOf4s[i%8] = outputMatrix.buffer[i];
     }
@@ -371,9 +374,9 @@ void displayAnimation() {
   }
 
   //calculate new 8-bit rbg values, assuming mfcc output is normed to 0..1
-  int rNew = pow(rMax, 2) * inputScalar;
-  int gNew = pow(gMax, 2) * inputScalar;
-  int bNew = pow(bMax, 2) * inputScalar;
+  uint8_t rNew = static_cast<uint8_t>((20.0 + log(rMax)) * inputScalar);
+  uint8_t gNew = static_cast<uint8_t>((20.0 + log(gMax)) * inputScalar);
+  uint8_t bNew = static_cast<uint8_t>((20.0 + log(bMax)) * inputScalar);
   int tentacleNew[numTentacles] = {0};
   if(outputMode == INDIVIDUAL_TENTS_BAR || outputMode == INDIVIDUAL_TENTS_CASCADING){
     int tentacleNew[numTentacles] = {0};
@@ -381,20 +384,21 @@ void displayAnimation() {
       tentacleNew[i] = (float) maxOf4s[i] * inputScalar;
       Serial.print("Tentacle ");
       Serial.print(i);
-      Serial.print(" value");
+      Serial.print(" value ");
       Serial.println(tentacleNew[i]);
     } 
   }
 
-  if (rMax < 0.4) {
-    rNew = 0;
-  }
-  if (gMax < 0.5) {
-    gNew = 0;
-  }
-  if (bMax < 0.3) {
-    bNew = 0;
-  }
+  ///TODO: Figure out what this was intended for and if we need it maybe
+  // if (rMax < 0.4) {
+  //   rNew = 0;
+  // }
+  // if (gMax < 0.5) {
+  //   gNew = 0;
+  // }
+  // if (bMax < 0.3) {
+  //   bNew = 0;
+  // }
 
   if (!printGraph && debug_arduino_filtering) {
 
@@ -406,11 +410,11 @@ void displayAnimation() {
     Serial.println(bNew);
 
     Serial.print("max rgb: ");
-    Serial.print(rMax);
+    Serial.print(log(rMax));
     Serial.print(" ");
-    Serial.print(gMax);
+    Serial.print(log(gMax));
     Serial.print(" ");
-    Serial.println(bMax);
+    Serial.println(log(bMax));
 
     Serial.print("max rgb index: ");
     Serial.print(rMaxIndex);

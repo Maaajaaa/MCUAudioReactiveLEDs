@@ -285,7 +285,7 @@ void displayAnimation() {
   if (!outputMatrix.buffer) {
     ei_printf("allocation of output matrix failed\n");
   }
-  run_mfcc_maaajaaa(&signal, &outputMatrix, debug_nn);
+  run_mfe_maaajaaa(&signal, &outputMatrix, debug_nn);
 
   double rMax = -100.0;
   int rMaxIndex = -1;

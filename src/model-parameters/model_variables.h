@@ -37,13 +37,12 @@ ei_dsp_named_axis_t ei_dsp_config_4_named_axes[] = {
 size_t ei_dsp_config_4_named_axes_size = 1;
 uint8_t ei_dsp_config_4_axes[] = { 0 };
 const uint32_t ei_dsp_config_4_axes_size = 1;
-ei_dsp_config_mfcc_t ei_dsp_config_4 = {
+ei_dsp_config_mfe_t ei_dsp_config_4 = {
     4, // uint32_t blockId
     4, // int implementationVersion
     1, // int length of axes
     ei_dsp_config_4_named_axes, // named axes
     ei_dsp_config_4_named_axes_size, // size of the named axes array
-    13, // int num_cepstral
     0.02f, // float frame_length
     0.02f, // float frame_stride
     32, // int num_filters
@@ -51,8 +50,7 @@ ei_dsp_config_mfcc_t ei_dsp_config_4 = {
     101, // int win_size
     0, // int low_frequency; defaults to 300
     0, // int high_frequency; defaults to sampling frequency/2
-    0.98f, // float pre_cof
-    1 // int pre_shift
+    2, // int noise_floor_db
 };
 
 const size_t ei_dsp_blocks_size = 1;
@@ -60,7 +58,7 @@ ei_model_dsp_t ei_dsp_blocks[ei_dsp_blocks_size] = {
     { // DSP block 4
         4,
         180, // output size
-        &extract_mfcc_features, // DSP function pointer
+        &extract_mfe_features, // DSP function pointer
         (void*)&ei_dsp_config_4, // pointer to config struct
         ei_dsp_config_4_axes, // array of offsets into the input stream, one for each axis
         ei_dsp_config_4_axes_size, // number of axes
