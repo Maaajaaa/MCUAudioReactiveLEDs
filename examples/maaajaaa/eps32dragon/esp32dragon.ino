@@ -14,16 +14,6 @@
  *
  */
 
-// If your target is limited in memory remove this macro to save 10K RAM
-#define EIDSP_QUANTIZE_FILTERBANK 0
-
-/**
- * Define the number of slices per model window. E.g. a model window of 1000 ms
- * with slices per model window set to 4. Results in a slice size of 250 ms.
- * For more info: https://docs.edgeimpulse.com/docs/continuous-audio-sampling
- */
-#define EI_CLASSIFIER_SLICES_PER_MODEL_WINDOW 1
-
 /*
  ** NOTE: If you run into TFLite arena allocation issue.
  **
@@ -44,42 +34,57 @@
 #include "freertos/task.h"
 
 #include "driver/i2s.h"
-#include <DSPforAudioReactiveMCU.h>
+#include "esp_dsp.h"
+//#include <DSPforAudioReactiveMCU.h>
 
 
+
+static signed short *sampleBuffer;
+//static bool debug_nn = false;  // Set this to true to see e.g. features generated from the raw signal
+static bool record_status = true;
+
+
+// //size needed for the mfcc buffer, seems to report just 1 x num filters
+// matrix_size_t mfe_buffer_size = speechpy::feature::calculate_mfe_buffer_size(
+//   EI_CLASSIFIER_SLICE_SIZE,
+//   EI_CLASSIFIER_FREQUENCY,
+//   ei_dsp_config_4.frame_length,
+//   ei_dsp_config_4.frame_stride,
+//   ei_dsp_config_4.num_filters,
+//   ei_dsp_config_4.implementation_version);
+
+// ei::matrix_t outputMatrix(1, EI_CLASSIFIER_NN_INPUT_FRAME_SIZE);
+
+/******New FFT stuff ------------------------------------------------------------ */
+
+#define FFT_SIZE 1024 //needs to be base 4 so we can use radix-4 fft, so next would be 4096
+#define SAMPLE_RATE 16000
+#define FFT_BIN_SPACING SAMPLE_RATE/FFT_SIZE
+#define FFT_SLICE_SIZE 800 //20 fft runs per second;
+//there's half as many complex as real outputs as complex has two components
+#define FFT_SIZE_COMPLEX_OUTPUTS FFT_SLICE_SIZE / 2
+//#define FFT_SLICE_SIZE 600 //30 fft runs per second;
+
+float fftInOut[FFT_SLICE_SIZE];
+float window[FFT_SLICE_SIZE];
+
+
+static const uint32_t sample_buffer_size = FFT_SLICE_SIZE;
+static signed short sampleBuffer[sample_buffer_size];
+
+//inspired by
 //https://forum.edgeimpulse.com/t/error-compiling-arduino-library-for-xiao-esp32s3-sense/8901
-
+//kept becuase its need
 /** Audio buffers, pointers and selectors */
 typedef struct {
   signed short *buffers[2];
   unsigned char selectedBufferIndex;
   unsigned char selectedBufferReady;
   unsigned int selectedBufferLen;
-  unsigned int n_samples;
-} inference_t;
+} captureBuffers_t;
 
-static inference_t captureBuf;
+static captureBuffers_t captureBuf;
 static bool record_ready = false;
-//static signed short *sampleBuffer;
-static bool debug_nn = false;  // Set this to true to see e.g. features generated from the raw signal
-static int print_results = -(EI_CLASSIFIER_SLICES_PER_MODEL_WINDOW);
-static bool record_status = true;
-
-static const uint32_t sample_buffer_size = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE;
-static signed short sampleBuffer[sample_buffer_size];
-
-//size needed for the mfcc buffer, seems to report just 1 x num filters
-matrix_size_t mfe_buffer_size = speechpy::feature::calculate_mfe_buffer_size(
-  EI_CLASSIFIER_SLICE_SIZE,
-  EI_CLASSIFIER_FREQUENCY,
-  ei_dsp_config_4.frame_length,
-  ei_dsp_config_4.frame_stride,
-  ei_dsp_config_4.num_filters,
-  ei_dsp_config_4.implementation_version);
-
-ei::matrix_t outputMatrix(1, EI_CLASSIFIER_NN_INPUT_FRAME_SIZE);
-
-
 
 /* NEOPIXEL STUFF -----------------------------------------------------------------*/
 #include <NeoPixelBus.h>
@@ -164,12 +169,13 @@ RGBColour pixelArray[NUMPIXELS];
 
 RGBColour pixelArrayOld[NUMPIXELS];
 
-void updateBatteryLevel(bool);
+void stripBootAnimation();
 
 /**
  * @brief      Arduino setup function
  */
 void setup() {
+
 
   strip.Begin();
   strip.Show();
@@ -180,60 +186,19 @@ void setup() {
   //  ;
   //initialize and test neoPixel
 
-  if (NUMPIXELS % 2 != 1 && outputMode == SYMMETRIC_CASCADING) {
-    //turn strip red
-    for (int i = NUMPIXELS; i > 0; i--) {
-      RgbColor redColor(255, 0, 0);
-      strip.SetPixelColor(i, redColor);
-    }
-    strip.Show();
-    //wait for serial
-    while (!Serial)
-      ;
-    //do not run the rest of the code
-    while (1) {
-      Serial.println("ERROR: NUMPIXELS must be an ueneven number");
-      delay(2000);
-    }
-  }
-  
-  RgbColor testColor(128, 0, 128);
-  strip.SetPixelColor(1, testColor);
-  for (int j = 0; j < NUMPIXELS; j++) {
-    for (int i = NUMPIXELS; i > 0; i--) {
-      strip.SetPixelColor(i, testColor);
-    }
-    strip.Show();
-    delay(10);
-  }
-  strip.ClearTo(RgbColor(0,0,0));
-  RgbColor evenTent(128, 0, 0);
-  RgbColor oddTent(0, 128, 0);
-  int index = 0;
-  for(int i = 0; i < numTentacles; i ++){
-    for(int j = 0; j < tentacles[i]; j++){
-      if(i % 8 == 0){
-        strip.SetPixelColor(index, RgbColor(255,0,0));
-      }else if(i % 8 == 1){
-        strip.SetPixelColor(index, RgbColor(0,255,0));
-      }else if(i % 8 == 2){
-        strip.SetPixelColor(index, RgbColor(0,0,255));
-      }else if(i % 8 == 3){
-        strip.SetPixelColor(index, RgbColor(255,255,0));
-      }else if(i % 8 == 4){
-        strip.SetPixelColor(index, RgbColor(0,255,255));
-      }else if(i % 8 == 5){
-        strip.SetPixelColor(index, RgbColor(255,0,255));
-      }else if(i % 8 == 6){
-        strip.SetPixelColor(index, RgbColor(255,0,0));
-      }else if(i % 8 == 7){
-        strip.SetPixelColor(index, RgbColor(128,0,255));
-      }
-      index ++;
-    }
+  //FFT radix-4 init
+  esp_err_t ret;
+  ret = dsps_fft4r_init_fc32(NULL, FFT_SIZE);
+  if (ret  != ESP_OK) {
+      Serial.printf("Not possible to initialize FFT4R. Error = %i", ret);
+      return;
   }
 
-  strip.Show();
+  //calculate hann window
+  dsps_wind_hann_f32(window, FFT_SLICE_SIZE);
+
+  stripBootAnimation();
+
   delay(5 * 1000); 
   strip.ClearTo(RgbColor(0,0,0));
 
@@ -242,50 +207,68 @@ void setup() {
     Serial.println("Gaussian init FAILED!");
   }
   
-
-  Serial.println("Edge Impulse Inferencing Demo");
-
-  // summary of inferencing settings (from model_metadata.h)
-  ei_printf("Inferencing settings:\n");
-  ei_printf("\tInterval: %.2f ms.\n", (float)EI_CLASSIFIER_INTERVAL_MS);
-  ei_printf("\tFrame size: %d\n", EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE);
-  ei_printf("\tSample length: %d ms.\n", EI_CLASSIFIER_RAW_SAMPLE_COUNT / 16);
-  ei_printf("\tNo. of classes: %d\n", sizeof(ei_classifier_inferencing_categories) / sizeof(ei_classifier_inferencing_categories[0]));
-  ei_printf("\tNumber of NN_Input: %d\n", EI_CLASSIFIER_NN_INPUT_FRAME_SIZE);
-  ei_printf("\tIdeal output size: %dx%d\n", mfe_buffer_size.cols, mfe_buffer_size.rows);
-
-  run_classifier_init();
-  ei_printf("classifier initialized");
-  if (startRecordingToBufferInNewThread(EI_CLASSIFIER_SLICE_SIZE) == false) {
-    ei_printf("ERR: Could not allocate audio buffer (size %d), this could be due to the window length of your model\r\n", EI_CLASSIFIER_RAW_SAMPLE_COUNT);
-    return;
-  }
 }
 
 /**
  * @brief      Arduino main function. Runs the inferencing loop.
  */
 void loop() {
+  //fill the buffer first, so we have data to begin with
+  //capturing will continue while said data is processed
+  bool result = waitUntilCaptureBufferFull();
+  if (!result) {
+    Serial.printf("ERR: Failed to record audio...\n");
+    return;
+  }
+  //run signal processing
+  runDSP();
+
+  //show the output
   displayAnimation();
+}
+
+void runDSP(){
+
+  unsigned int start_dsp = dsp_get_cpu_cycle_count();
+  //apply hamming window and copy over "old" data
+  for(u16_t i = 0; i < FFT_SLICE_SIZE; i++){
+    fftInOut[i] = captureBuf.buffers[captureBuf.selectedBufferIndex ^ 1][i] * window [i];
+  }
+
+  esp_err_t ret;
+  //run FFT
+  ret = dsps_fft4r_fc32(fftInOut, FFT_SIZE_COMPLEX_OUTPUTS);
+  if (ret  != ESP_OK) {
+    Serial.printf("FAILED to run FFT4R. Error = %i", ret);
+    return;
+  }
+  // Bit reverse
+  ret = dsps_bit_rev4r_fc32(fftInOut, FFT_SIZE_COMPLEX_OUTPUTS);
+  if (ret  != ESP_OK) {
+    Serial.printf("FAILED to run dsps_bit_rev4r_fc32. Error = %i", ret);
+    return;
+  }
+  // Convert one complex vector with length N/2 to one real spectrum vector with length N/2
+  ret = dsps_cplx2real_fc32(fftInOut, FFT_SIZE_COMPLEX_OUTPUTS);
+  if (ret  != ESP_OK) {
+    Serial.printf("FAILED to run dsps_cplx2real_fc32. Error = %i", ret);
+    return;
+  }
+  unsigned int end_dsp = dsp_get_cpu_cycle_count();
+  Serial.printf("DSP took: %f us / %i ticks\n", (end_dsp - start_dsp) /240.0, (end_dsp - start_dsp) );
 }
 
 void displayAnimation() {
 
-  bool m = waitUntilCaptureBufferFull();
-  if (!m) {
-    ei_printf("ERR: Failed to record audio...\n");
-    return;
-  }
+  // signal_t signal;
+  // signal.total_length = FFT_SLICE_SIZE;
+  // signal.get_data = &microphone_audio_signal_get_data;
+  // ei_impulse_result_t result = { 0 };
 
-  signal_t signal;
-  signal.total_length = EI_CLASSIFIER_SLICE_SIZE;
-  signal.get_data = &microphone_audio_signal_get_data;
-  ei_impulse_result_t result = { 0 };
-
-  if (!outputMatrix.buffer) {
-    ei_printf("allocation of output matrix failed\n");
-  }
-  run_mfe_maaajaaa(&signal, &outputMatrix, debug_nn);
+  // if (!fftInOut) {
+  //   Serial.printf("allocation of output matrix failed\n");
+  // }
+  // run_mfe_maaajaaa(&signal, &outputMatrix, debug_nn);
 
   double rMax = -100.0;
   int rMaxIndex = -1;
@@ -297,7 +280,7 @@ void displayAnimation() {
   double maxOf4s[numTentacles] = {-100.0};
 
   //relevant buffer area where the mfcc output is stored
-  int relevantBuferCols = mfe_buffer_size.cols;
+  int relevantBuferCols = FFT_SIZE;
 
   int firstThird, secondThird;
   firstThird = 3;
@@ -317,25 +300,25 @@ void displayAnimation() {
   }
   //intersting output is at the end of the matrix, see ei_run_dsp.h:833
   if(debug_arduino_filtering) Serial.print("\n\nData: ");
-  for (int i = mfe_buffer_size.cols-relevantBuferCols; i < mfe_buffer_size.cols; i++) {
-    if(debug_arduino_filtering) Serial.printf("%5.2f ", log(outputMatrix.buffer[i]));
-    if(outputMatrix.buffer[i] > maxOf4s[i%8]){
-      maxOf4s[i%8] = outputMatrix.buffer[i];
+  for (int i = FFT_SIZE - relevantBuferCols; i < FFT_SIZE; i++) {
+    if(debug_arduino_filtering) Serial.printf("%5.2f ", log(fftInOut[i]));
+    if(fftInOut[i] > maxOf4s[i%8]){
+      maxOf4s[i%8] = fftInOut[i];
     }
     //find maxima of the thrids of the spectrum
     if (i < firstThird) {
-      if (outputMatrix.buffer[i] > rMax) {
-        rMax = outputMatrix.buffer[i];
+      if (fftInOut[i] > rMax) {
+        rMax = fftInOut[i];
         rMaxIndex = i;
       }
     } else if (i < secondThird) {
-      if (outputMatrix.buffer[i] > gMax) {
-        gMax = outputMatrix.buffer[i];
+      if (fftInOut[i] > gMax) {
+        gMax = fftInOut[i];
         gMaxIndex = i;
       }
     } else {
-      if (outputMatrix.buffer[i] > bMax) {
-        bMax = outputMatrix.buffer[i];
+      if (fftInOut[i] > bMax) {
+        bMax = fftInOut[i];
         bMaxIndex = i;
       }
     }
@@ -347,14 +330,14 @@ void displayAnimation() {
 
     //print graph bar
     if (printGraph && nonPrintCycles >= printEvery) {
-      for (int j = 0; j < round(graphMaxLength * outputMatrix.buffer[i]); j++) {
+      for (int j = 0; j < round(graphMaxLength * fftInOut[i]); j++) {
         Serial.print("▮");
       }
       Serial.println();
     }
     if (i == ceptrumToShow && outputMode == SINGLE_CEPTRUM) {
       for (int j = 0; j < NUMPIXELS; j++) {
-        if (j <= round(NUMPIXELS * outputMatrix.buffer[i])) {
+        if (j <= round(NUMPIXELS * fftInOut[i])) {
           strip.SetPixelColor(j,RgbColor(255, 0, 0));
           //pixels.setPixelColor(j, 255, 0, 0);
         } else {
@@ -590,7 +573,7 @@ static void audio_inference_callback(uint32_t n_bytes) {
   for (int i = 0; i < n_bytes >> 1; i++) {
     captureBuf.buffers[captureBuf.selectedBufferIndex][captureBuf.selectedBufferLen++] = sampleBuffer[i];
 
-    if (captureBuf.selectedBufferLen >= captureBuf.n_samples) {
+    if (captureBuf.selectedBufferLen >= FFT_SLICE_SIZE) {
       captureBuf.selectedBufferIndex ^= 1;
       captureBuf.selectedBufferLen = 0;
       captureBuf.selectedBufferReady = 1;
@@ -609,22 +592,17 @@ static void capture_samples(void *arg) {
     i2s_read((i2s_port_t)1, (void *)sampleBuffer, i2s_bytes_to_read, &bytes_read, 100);
 
     if (bytes_read <= 0) {
-      ei_printf("Error in I2S read : %d", bytes_read);
+      Serial.printf("Error in I2S read : %d", bytes_read);
     } else {
       if (bytes_read < i2s_bytes_to_read) {
-        ei_printf("Partial I2S read");
+        Serial.printf("Partial I2S read");
       }
 
       // scale the data (otherwise the sound is too quiet)
       for (int x = 0; x < i2s_bytes_to_read / 2; x++) {
         sampleBuffer[x] = (int16_t)(sampleBuffer[x]) * 8;
       }
-
-      if (record_status) {
-        audio_inference_callback(i2s_bytes_to_read);
-      } else {
-        break;
-      }
+      audio_inference_callback(i2s_bytes_to_read);
     }
   }
   vTaskDelete(NULL);
@@ -653,11 +631,10 @@ static bool startRecordingToBufferInNewThread(uint32_t n_samples) {
 
   captureBuf.selectedBufferIndex = 0;
   captureBuf.selectedBufferLen = 0;
-  captureBuf.n_samples = n_samples;
   captureBuf.selectedBufferReady = 0;
 
   if (i2s_init(EI_CLASSIFIER_FREQUENCY)) {
-    ei_printf("Failed to start I2S!");
+    Serial.printf("Failed to start I2S!");
   }
 
   ei_sleep(100);
@@ -678,9 +655,8 @@ static bool waitUntilCaptureBufferFull(void) {
   bool ret = true;
 
   if (captureBuf.selectedBufferReady == 1) {
-    ei_printf(
-      "Error sample buffer overrun. Decrease the number of slices per model window "
-      "(EI_CLASSIFIER_SLICES_PER_MODEL_WINDOW)\n");
+    Serial.printf(
+      "Error sample buffer overrun. Decrease the number of slices per model window\n");
     ret = false;
   }
 
@@ -695,11 +671,11 @@ static bool waitUntilCaptureBufferFull(void) {
 /**
  * Get raw audio signal data
  */
-static int microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr) {
-  numpy::int16_to_float(&captureBuf.buffers[captureBuf.selectedBufferIndex ^ 1][offset], out_ptr, length);
+// static int microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr) {
+//   numpy::int16_to_float(&captureBuf.buffers[captureBuf.selectedBufferIndex ^ 1][offset], out_ptr, length);
 
-  return 0;
-}
+//   return 0;
+// }
 
 /**
  * @brief      Stop PDM and release buffers
@@ -736,17 +712,17 @@ static int i2s_init(uint32_t sampling_rate) {
 
   ret = i2s_driver_install((i2s_port_t)1, &i2s_config, 0, NULL);
   if (ret != ESP_OK) {
-    ei_printf("Error in i2s_driver_install");
+    Serial.printf("Error in i2s_driver_install");
   }
 
   ret = i2s_set_pin((i2s_port_t)1, &pin_config);
   if (ret != ESP_OK) {
-    ei_printf("Error in i2s_set_pin");
+    Serial.printf("Error in i2s_set_pin");
   }
 
   ret = i2s_zero_dma_buffer((i2s_port_t)1);
   if (ret != ESP_OK) {
-    ei_printf("Error in initializing dma buffer with 0");
+    Serial.printf("Error in initializing dma buffer with 0");
   }
 
   return int(ret);
@@ -765,6 +741,63 @@ float lowPassFilter(float alpha, float y, float y_prev) {
   // calculate the filtering
   //float alpha = Tf/(Tf + Ts);
   return alpha * y_prev + (1.0f - alpha) * y;
+}
+
+void stripBootAnimation(){
+    if (NUMPIXELS % 2 != 1 && outputMode == SYMMETRIC_CASCADING) {
+    //turn strip red
+    for (int i = NUMPIXELS; i > 0; i--) {
+      RgbColor redColor(255, 0, 0);
+      strip.SetPixelColor(i, redColor);
+    }
+    strip.Show();
+    //wait for serial
+    while (!Serial)
+      ;
+    //do not run the rest of the code
+    while (1) {
+      Serial.println("ERROR: NUMPIXELS must be an ueneven number");
+      delay(2000);
+    }
+  }
+  
+  RgbColor testColor(128, 0, 128);
+  strip.SetPixelColor(1, testColor);
+  for (int j = 0; j < NUMPIXELS; j++) {
+    for (int i = NUMPIXELS; i > 0; i--) {
+      strip.SetPixelColor(i, testColor);
+    }
+    strip.Show();
+    delay(10);
+  }
+  strip.ClearTo(RgbColor(0,0,0));
+  RgbColor evenTent(128, 0, 0);
+  RgbColor oddTent(0, 128, 0);
+  int index = 0;
+  for(int i = 0; i < numTentacles; i ++){
+    for(int j = 0; j < tentacles[i]; j++){
+      if(i % 8 == 0){
+        strip.SetPixelColor(index, RgbColor(255,0,0));
+      }else if(i % 8 == 1){
+        strip.SetPixelColor(index, RgbColor(0,255,0));
+      }else if(i % 8 == 2){
+        strip.SetPixelColor(index, RgbColor(0,0,255));
+      }else if(i % 8 == 3){
+        strip.SetPixelColor(index, RgbColor(255,255,0));
+      }else if(i % 8 == 4){
+        strip.SetPixelColor(index, RgbColor(0,255,255));
+      }else if(i % 8 == 5){
+        strip.SetPixelColor(index, RgbColor(255,0,255));
+      }else if(i % 8 == 6){
+        strip.SetPixelColor(index, RgbColor(255,0,0));
+      }else if(i % 8 == 7){
+        strip.SetPixelColor(index, RgbColor(128,0,255));
+      }
+      index ++;
+    }
+  }
+
+  strip.Show();
 }
 
 
