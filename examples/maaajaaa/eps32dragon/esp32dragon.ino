@@ -52,13 +52,13 @@
 /** Audio buffers, pointers and selectors */
 typedef struct {
   signed short *buffers[2];
-  unsigned char buf_select;
-  unsigned char buf_ready;
-  unsigned int buf_count;
+  unsigned char selectedBufferIndex;
+  unsigned char selectedBufferReady;
+  unsigned int selectedBufferLen;
   unsigned int n_samples;
 } inference_t;
 
-static inference_t inference;
+static inference_t captureBuf;
 static bool record_ready = false;
 //static signed short *sampleBuffer;
 static bool debug_nn = false;  // Set this to true to see e.g. features generated from the raw signal
@@ -256,7 +256,7 @@ void setup() {
 
   run_classifier_init();
   ei_printf("classifier initialized");
-  if (microphone_inference_start(EI_CLASSIFIER_SLICE_SIZE) == false) {
+  if (startRecordingToBufferInNewThread(EI_CLASSIFIER_SLICE_SIZE) == false) {
     ei_printf("ERR: Could not allocate audio buffer (size %d), this could be due to the window length of your model\r\n", EI_CLASSIFIER_RAW_SAMPLE_COUNT);
     return;
   }
@@ -271,7 +271,7 @@ void loop() {
 
 void displayAnimation() {
 
-  bool m = microphone_inference_record();
+  bool m = waitUntilCaptureBufferFull();
   if (!m) {
     ei_printf("ERR: Failed to record audio...\n");
     return;
@@ -588,12 +588,12 @@ void displayAnimation() {
 
 static void audio_inference_callback(uint32_t n_bytes) {
   for (int i = 0; i < n_bytes >> 1; i++) {
-    inference.buffers[inference.buf_select][inference.buf_count++] = sampleBuffer[i];
+    captureBuf.buffers[captureBuf.selectedBufferIndex][captureBuf.selectedBufferLen++] = sampleBuffer[i];
 
-    if (inference.buf_count >= inference.n_samples) {
-      inference.buf_select ^= 1;
-      inference.buf_count = 0;
-      inference.buf_ready = 1;
+    if (captureBuf.selectedBufferLen >= captureBuf.n_samples) {
+      captureBuf.selectedBufferIndex ^= 1;
+      captureBuf.selectedBufferLen = 0;
+      captureBuf.selectedBufferReady = 1;
     }
   }
 }
@@ -637,24 +637,24 @@ static void capture_samples(void *arg) {
  *
  * @return     { description_of_the_return_value }
  */
-static bool microphone_inference_start(uint32_t n_samples) {
-  inference.buffers[0] = (signed short *)malloc(n_samples * sizeof(signed short));
+static bool startRecordingToBufferInNewThread(uint32_t n_samples) {
+  captureBuf.buffers[0] = (signed short *)malloc(n_samples * sizeof(signed short));
 
-  if (inference.buffers[0] == NULL) {
+  if (captureBuf.buffers[0] == NULL) {
     return false;
   }
 
-  inference.buffers[1] = (signed short *)malloc(n_samples * sizeof(signed short));
+  captureBuf.buffers[1] = (signed short *)malloc(n_samples * sizeof(signed short));
 
-  if (inference.buffers[1] == NULL) {
-    ei_free(inference.buffers[0]);
+  if (captureBuf.buffers[1] == NULL) {
+    ei_free(captureBuf.buffers[0]);
     return false;
   }
 
-  inference.buf_select = 0;
-  inference.buf_count = 0;
-  inference.n_samples = n_samples;
-  inference.buf_ready = 0;
+  captureBuf.selectedBufferIndex = 0;
+  captureBuf.selectedBufferLen = 0;
+  captureBuf.n_samples = n_samples;
+  captureBuf.selectedBufferReady = 0;
 
   if (i2s_init(EI_CLASSIFIER_FREQUENCY)) {
     ei_printf("Failed to start I2S!");
@@ -674,21 +674,21 @@ static bool microphone_inference_start(uint32_t n_samples) {
  *
  * @return     True when finished
  */
-static bool microphone_inference_record(void) {
+static bool waitUntilCaptureBufferFull(void) {
   bool ret = true;
 
-  if (inference.buf_ready == 1) {
+  if (captureBuf.selectedBufferReady == 1) {
     ei_printf(
       "Error sample buffer overrun. Decrease the number of slices per model window "
       "(EI_CLASSIFIER_SLICES_PER_MODEL_WINDOW)\n");
     ret = false;
   }
 
-  while (inference.buf_ready == 0) {
+  while (captureBuf.selectedBufferReady == 0) {
     delay(1);
   }
 
-  inference.buf_ready = 0;
+  captureBuf.selectedBufferReady = 0;
   return true;
 }
 
@@ -696,7 +696,7 @@ static bool microphone_inference_record(void) {
  * Get raw audio signal data
  */
 static int microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr) {
-  numpy::int16_to_float(&inference.buffers[inference.buf_select ^ 1][offset], out_ptr, length);
+  numpy::int16_to_float(&captureBuf.buffers[captureBuf.selectedBufferIndex ^ 1][offset], out_ptr, length);
 
   return 0;
 }
@@ -706,8 +706,8 @@ static int microphone_audio_signal_get_data(size_t offset, size_t length, float 
  */
 static void microphone_inference_end(void) {
   i2s_deinit();
-  ei_free(inference.buffers[0]);
-  ei_free(inference.buffers[1]);
+  ei_free(captureBuf.buffers[0]);
+  ei_free(captureBuf.buffers[1]);
 }
 
 
