@@ -37,9 +37,6 @@
 #include "esp_dsp.h"
 //#include <DSPforAudioReactiveMCU.h>
 
-
-
-static signed short *sampleBuffer;
 //static bool debug_nn = false;  // Set this to true to see e.g. features generated from the raw signal
 static bool record_status = true;
 
@@ -57,16 +54,16 @@ static bool record_status = true;
 
 /******New FFT stuff ------------------------------------------------------------ */
 
-#define FFT_SIZE 1024 //needs to be base 4 so we can use radix-4 fft, so next would be 4096
+#define FFT_SIZE 256 //needs to be base 4 so we can use radix-4 fft, so next would be 4096
 #define SAMPLE_RATE 16000
 #define FFT_BIN_SPACING SAMPLE_RATE/FFT_SIZE
-#define FFT_SLICE_SIZE 800 //20 fft runs per second;
+#define FFT_SLICE_SIZE FFT_SIZE//1024//800 is 20 fft runs per second;
 //there's half as many complex as real outputs as complex has two components
-#define FFT_SIZE_COMPLEX_OUTPUTS FFT_SLICE_SIZE / 2
+#define FFT_SIZE_COMPLEX_OUTPUTS FFT_SIZE//1024//FFT_SLICE_SIZE / 2
 //#define FFT_SLICE_SIZE 600 //30 fft runs per second;
 
-float fftInOut[FFT_SLICE_SIZE];
-float window[FFT_SLICE_SIZE];
+float fftInOut[FFT_SIZE_COMPLEX_OUTPUTS*2];
+float window[FFT_SIZE_COMPLEX_OUTPUTS];
 
 
 static const uint32_t sample_buffer_size = FFT_SLICE_SIZE;
@@ -108,8 +105,6 @@ int graphMaxLength = 100.0;
 #define LINE_CASCADING 2
 #define SYMMETRIC_CASCADING 3
 #define SINGLE_CEPTRUM 1
-#define INDIVIDUAL_TENTS_CASCADING 4
-#define INDIVIDUAL_TENTS_BAR 5
 int ceptrumToShow = 0;
 
 /* Low-Pass Filter Constants --------------------------------------------------- */
@@ -157,7 +152,7 @@ float inputScalarMax = 8.0;
 
 int numCycles = 0;
 
-int outputMode = SYMMETRIC_CASCADING; //INDIVIDUAL_TENTS_BAR;
+int outputMode = SYMMETRIC_CASCADING;
 
 struct RGBColour {
   uint8_t r;
@@ -182,31 +177,36 @@ void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
   //don't normally wait for serial
-  //while (!Serial)
-  //  ;
+  while (!Serial)
+  ;
+
+  Serial.println("ESP32 Dragon");
   //initialize and test neoPixel
 
+  stripBootAnimation();
+
+  Serial.println("Boot animation finished");
+  delay(2 * 1000); 
+  strip.ClearTo(RgbColor(0,0,0));
+  strip.Show();
   //FFT radix-4 init
   esp_err_t ret;
-  ret = dsps_fft4r_init_fc32(NULL, FFT_SIZE);
+  ESP_ERROR_CHECK(ret = dsps_fft4r_init_fc32(NULL, FFT_SIZE_COMPLEX_OUTPUTS));
   if (ret  != ESP_OK) {
       Serial.printf("Not possible to initialize FFT4R. Error = %i", ret);
       return;
   }
 
   //calculate hann window
-  dsps_wind_hann_f32(window, FFT_SLICE_SIZE);
-
-  stripBootAnimation();
-
-  delay(5 * 1000); 
-  strip.ClearTo(RgbColor(0,0,0));
+  dsps_wind_hann_f32(window, FFT_SIZE_COMPLEX_OUTPUTS);
 
   //calculate kernel for gaussian filter
   if(gaussianFilter.begin(SIGMA_FINAL_GAUSSIAN) != 0){
     Serial.println("Gaussian init FAILED!");
   }
-  
+
+  //start microphone recording
+  startRecordingToBufferInNewThread(FFT_SLICE_SIZE);
 }
 
 /**
@@ -228,13 +228,15 @@ void loop() {
 }
 
 void runDSP(){
-
+  static int notPrintedFor = 0;
   unsigned int start_dsp = dsp_get_cpu_cycle_count();
   //apply hamming window and copy over "old" data
   for(u16_t i = 0; i < FFT_SLICE_SIZE; i++){
-    fftInOut[i] = captureBuf.buffers[captureBuf.selectedBufferIndex ^ 1][i] * window [i];
+    //even indices (and 0) get the value
+    fftInOut[i*2] = captureBuf.buffers[captureBuf.selectedBufferIndex ^ 1][i] * window [i];
+    //odd indices are the complex part and thus 0
+    fftInOut[i*2+1] = 0;
   }
-
   esp_err_t ret;
   //run FFT
   ret = dsps_fft4r_fc32(fftInOut, FFT_SIZE_COMPLEX_OUTPUTS);
@@ -254,8 +256,15 @@ void runDSP(){
     Serial.printf("FAILED to run dsps_cplx2real_fc32. Error = %i", ret);
     return;
   }
+
   unsigned int end_dsp = dsp_get_cpu_cycle_count();
+  notPrintedFor++;
+  if(notPrintedFor > 20){
   Serial.printf("DSP took: %f us / %i ticks\n", (end_dsp - start_dsp) /240.0, (end_dsp - start_dsp) );
+  //using FFT4R @ 256 DSP took: 113.325000 us / 27198 ticks
+  
+  notPrintedFor = 0;
+  }
 }
 
 void displayAnimation() {
@@ -300,6 +309,7 @@ void displayAnimation() {
   }
   //intersting output is at the end of the matrix, see ei_run_dsp.h:833
   if(debug_arduino_filtering) Serial.print("\n\nData: ");
+
   for (int i = FFT_SIZE - relevantBuferCols; i < FFT_SIZE; i++) {
     if(debug_arduino_filtering) Serial.printf("%5.2f ", log(fftInOut[i]));
     if(fftInOut[i] > maxOf4s[i%8]){
@@ -323,11 +333,6 @@ void displayAnimation() {
       }
     }
 
-    if (!printGraph /*&& i < 20*/) {
-      //Serial.print(sampleBuffer[i]);
-      Serial.print(" ");
-    }
-
     //print graph bar
     if (printGraph && nonPrintCycles >= printEvery) {
       for (int j = 0; j < round(graphMaxLength * fftInOut[i]); j++) {
@@ -347,8 +352,8 @@ void displayAnimation() {
       }
     }
   }
-  if (!printGraph)
-    Serial.print("\n");
+  //if (!printGraph)
+    //Serial.print("\n");
 
   if (printGraph && nonPrintCycles >= printEvery) {
     nonPrintCycles = 0;
@@ -360,17 +365,6 @@ void displayAnimation() {
   uint8_t rNew = static_cast<uint8_t>((20.0 + log(rMax)) * inputScalar);
   uint8_t gNew = static_cast<uint8_t>((20.0 + log(gMax)) * inputScalar);
   uint8_t bNew = static_cast<uint8_t>((20.0 + log(bMax)) * inputScalar);
-  int tentacleNew[numTentacles] = {0};
-  if(outputMode == INDIVIDUAL_TENTS_BAR || outputMode == INDIVIDUAL_TENTS_CASCADING){
-    int tentacleNew[numTentacles] = {0};
-    for(int i = 0; i < numTentacles; i++){
-      tentacleNew[i] = (float) maxOf4s[i] * inputScalar;
-      Serial.print("Tentacle ");
-      Serial.print(i);
-      Serial.print(" value ");
-      Serial.println(tentacleNew[i]);
-    } 
-  }
 
   ///TODO: Figure out what this was intended for and if we need it maybe
   // if (rMax < 0.4) {
@@ -432,80 +426,6 @@ void displayAnimation() {
       }
       //set center pixel
       pixelArray[centerPixel] = { rNew, gNew, bNew };
-      break;
-    }
-
-    case INDIVIDUAL_TENTS_CASCADING:
-    {
-      int index = 0;
-      for(int t = 0; t < numTentacles; t++){
-        int numPix = tentacles[t];
-        int centerPixel = numPix / 2 + 1;
-        //center to left cascading
-        for (int i = numPix; i > centerPixel; i--) {
-          pixelArray[index+i] = pixelArray[index+i - 1];
-        }
-        //right to center cascading
-        for (int i = 0; i < numPix; i++) {
-          pixelArray[index+i] = pixelArray[index+i + 1];
-        }
-        //set center pixel
-        pixelArray[index+centerPixel] = { rNew, gNew, bNew };
-        index += numPix;
-      }      
-      break;
-    }
-    case INDIVIDUAL_TENTS_BAR:
-    {
-      int index = 0;
-      for(int t = 0; t < numTentacles; t++){
-        RgbColor tColor(255,0,0);
-        if(t % 8 == 0){
-          tColor = RgbColor(255,0,0);
-        }else if(t % 8 == 1){
-          tColor = RgbColor(0,255,0);
-        }else if(t % 8 == 2){
-          tColor = RgbColor(0,0,255);
-        }else if(t % 8 == 3){
-          tColor = RgbColor(255,255,0);
-        }else if(t % 8 == 4){
-          tColor = RgbColor(0,255,255);
-        }else if(t % 8 == 5){
-          tColor = RgbColor(255,0,255);
-        }else if(t % 8 == 6){
-          tColor = RgbColor(255,0,0);
-        }else{
-          tColor = RgbColor(128,128,128);
-        }
-        int numPix = tentacles[t];
-        int centerPixel = numPix / 2 + 1;
-        //first scale to 0 - 1 scale, then size for half a tentacle
-        float absolutePower = (float) tentacleNew[t] / minimumAverage;
-        float relativePower =  absolutePower * ((numPix-1)/2);
-        int i = 0;
-        while(i < numPix){
-
-          if(i-numPix == 1){
-            //last Pixel on an odd-numbered strip
-            if(i <= relativePower){
-              pixelArray[index + i] = {tColor[ColorIndexR], tColor[ColorIndexG], tColor[ColorIndexB]};
-            }else{
-              pixelArray[index + i] = {0, 0, 0};
-            }
-            i += 1;
-          }else{
-            if(i <= relativePower){
-              pixelArray[index + i] = {tColor[ColorIndexR], tColor[ColorIndexG], tColor[ColorIndexB]};
-              pixelArray[index + numPix - i] = {tColor[ColorIndexR], tColor[ColorIndexG], tColor[ColorIndexB]};
-            }else{
-              pixelArray[index + i] = {0, 0, 0};
-              pixelArray[index + numPix - i] = {0, 0, 0};
-            }
-            i += 2;
-          }
-        }
-        index += numPix;
-      }
       break;
     }
   }
@@ -625,7 +545,7 @@ static bool startRecordingToBufferInNewThread(uint32_t n_samples) {
   captureBuf.buffers[1] = (signed short *)malloc(n_samples * sizeof(signed short));
 
   if (captureBuf.buffers[1] == NULL) {
-    ei_free(captureBuf.buffers[0]);
+    free(captureBuf.buffers[0]);
     return false;
   }
 
@@ -633,11 +553,11 @@ static bool startRecordingToBufferInNewThread(uint32_t n_samples) {
   captureBuf.selectedBufferLen = 0;
   captureBuf.selectedBufferReady = 0;
 
-  if (i2s_init(EI_CLASSIFIER_FREQUENCY)) {
+  if (i2s_init(SAMPLE_RATE)) {
     Serial.printf("Failed to start I2S!");
   }
 
-  ei_sleep(100);
+  delay(100);
 
   record_status = true;
 
@@ -682,8 +602,8 @@ static bool waitUntilCaptureBufferFull(void) {
  */
 static void microphone_inference_end(void) {
   i2s_deinit();
-  ei_free(captureBuf.buffers[0]);
-  ei_free(captureBuf.buffers[1]);
+  free(captureBuf.buffers[0]);
+  free(captureBuf.buffers[1]);
 }
 
 
@@ -773,27 +693,23 @@ void stripBootAnimation(){
   strip.ClearTo(RgbColor(0,0,0));
   RgbColor evenTent(128, 0, 0);
   RgbColor oddTent(0, 128, 0);
-  int index = 0;
-  for(int i = 0; i < numTentacles; i ++){
-    for(int j = 0; j < tentacles[i]; j++){
-      if(i % 8 == 0){
-        strip.SetPixelColor(index, RgbColor(255,0,0));
-      }else if(i % 8 == 1){
-        strip.SetPixelColor(index, RgbColor(0,255,0));
-      }else if(i % 8 == 2){
-        strip.SetPixelColor(index, RgbColor(0,0,255));
-      }else if(i % 8 == 3){
-        strip.SetPixelColor(index, RgbColor(255,255,0));
-      }else if(i % 8 == 4){
-        strip.SetPixelColor(index, RgbColor(0,255,255));
-      }else if(i % 8 == 5){
-        strip.SetPixelColor(index, RgbColor(255,0,255));
-      }else if(i % 8 == 6){
-        strip.SetPixelColor(index, RgbColor(255,0,0));
-      }else if(i % 8 == 7){
-        strip.SetPixelColor(index, RgbColor(128,0,255));
-      }
-      index ++;
+  for(int i = 0; i < NUMPIXELS; i ++){
+    if(i % 8 == 0){
+      strip.SetPixelColor(i, RgbColor(255,0,0));
+    }else if(i % 8 == 1){
+      strip.SetPixelColor(i, RgbColor(0,255,0));
+    }else if(i % 8 == 2){
+      strip.SetPixelColor(i, RgbColor(0,0,255));
+    }else if(i % 8 == 3){
+      strip.SetPixelColor(i, RgbColor(255,255,0));
+    }else if(i % 8 == 4){
+      strip.SetPixelColor(i, RgbColor(0,255,255));
+    }else if(i % 8 == 5){
+      strip.SetPixelColor(i, RgbColor(255,0,255));
+    }else if(i % 8 == 6){
+      strip.SetPixelColor(i, RgbColor(255,0,0));
+    }else if(i % 8 == 7){
+      strip.SetPixelColor(i, RgbColor(128,0,255));
     }
   }
 
@@ -815,7 +731,3 @@ float updateRollingAverage(float newVal) {
   rollingPeakAvg += newVal / ravSamplesize;
   return rollingPeakAvg;
 }
-
-#if !defined(EI_CLASSIFIER_SENSOR) || EI_CLASSIFIER_SENSOR != EI_CLASSIFIER_SENSOR_MICROPHONE
-#error "Invalid model for current sensor."
-#endif
