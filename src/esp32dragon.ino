@@ -54,16 +54,16 @@ static bool record_status = true;
 
 /******New FFT stuff ------------------------------------------------------------ */
 
-#define FFT_SIZE 256 //needs to be base 4 so we can use radix-4 fft, so next would be 4096
-#define SAMPLE_RATE 16000
+#define FFT_SIZE 2048 //needs to be base 4 so we can use radix-4 fft, so next would be 4096
+#define SAMPLE_RATE 50000
 #define FFT_BIN_SPACING SAMPLE_RATE/FFT_SIZE
 #define FFT_SLICE_SIZE FFT_SIZE//1024//800 is 20 fft runs per second;
-//there's half as many complex as real outputs as complex has two components
-#define FFT_SIZE_COMPLEX_OUTPUTS FFT_SIZE//1024//FFT_SLICE_SIZE / 2
 //#define FFT_SLICE_SIZE 600 //30 fft runs per second;
 
-float fftInOut[FFT_SIZE_COMPLEX_OUTPUTS*2];
-float window[FFT_SIZE_COMPLEX_OUTPUTS];
+
+//needs to be twice as as large because it stores the numbers as complex numbers
+float fftInOut[FFT_SIZE*2];
+float window[FFT_SIZE];
 
 
 static const uint32_t sample_buffer_size = FFT_SLICE_SIZE;
@@ -191,14 +191,20 @@ void setup() {
   strip.Show();
   //FFT radix-4 init
   esp_err_t ret;
-  ESP_ERROR_CHECK(ret = dsps_fft4r_init_fc32(NULL, FFT_SIZE_COMPLEX_OUTPUTS));
+  ESP_ERROR_CHECK(ret = dsps_fft2r_init_fc32(NULL, FFT_SIZE));
+  if (ret  != ESP_OK) {
+      Serial.printf("Not possible to initialize FFT2R. Error = %i", ret);
+      return;
+  }
+  //we need 4r as a workaround for the 2r + cplx2real
+  ESP_ERROR_CHECK(ret = dsps_fft4r_init_fc32(NULL, FFT_SIZE));
   if (ret  != ESP_OK) {
       Serial.printf("Not possible to initialize FFT4R. Error = %i", ret);
       return;
   }
 
   //calculate hann window
-  dsps_wind_hann_f32(window, FFT_SIZE_COMPLEX_OUTPUTS);
+  dsps_wind_hann_f32(window, FFT_SIZE);
 
   //calculate kernel for gaussian filter
   if(gaussianFilter.begin(SIGMA_FINAL_GAUSSIAN) != 0){
@@ -239,19 +245,22 @@ void runDSP(){
   }
   esp_err_t ret;
   //run FFT
-  ret = dsps_fft4r_fc32(fftInOut, FFT_SIZE_COMPLEX_OUTPUTS);
+  ret = dsps_fft2r_fc32(fftInOut, FFT_SIZE);
   if (ret  != ESP_OK) {
     Serial.printf("FAILED to run FFT4R. Error = %i", ret);
     return;
   }
   // Bit reverse
-  ret = dsps_bit_rev4r_fc32(fftInOut, FFT_SIZE_COMPLEX_OUTPUTS);
+  ret = dsps_bit_rev2r_fc32(fftInOut, FFT_SIZE);
   if (ret  != ESP_OK) {
     Serial.printf("FAILED to run dsps_bit_rev4r_fc32. Error = %i", ret);
     return;
   }
+
+  ///TODO: calculate phase angles (needs  to happen here or before bit reveerse)
+  
   // Convert one complex vector with length N/2 to one real spectrum vector with length N/2
-  ret = dsps_cplx2real_fc32(fftInOut, FFT_SIZE_COMPLEX_OUTPUTS);
+  ret = dsps_cplx2real_fc32(fftInOut, FFT_SIZE);
   if (ret  != ESP_OK) {
     Serial.printf("FAILED to run dsps_cplx2real_fc32. Error = %i", ret);
     return;
@@ -262,7 +271,14 @@ void runDSP(){
   if(notPrintedFor > 20){
   Serial.printf("DSP took: %f us / %i ticks\n", (end_dsp - start_dsp) /240.0, (end_dsp - start_dsp) );
   //using FFT4R @ 256 DSP took: 113.325000 us / 27198 ticks
-  
+  //using FFT4R @ 4096 DSP took: 2036.950000 us / 488868 ticks
+
+  //using FFT2R @ 256 DSP DSP took: 138.216667 us / 33172 ticks
+  //using FFT2R @ 4096 DSP took: 2775.645833 us / 666155 ticks
+  //using FFT2R @ 512 DSP took: 293.220833 us / 70373 ticks
+  //using FFT2R @ 1024 DSP took: 616.895833 us / 148055 ticks
+  //using FFT2R @ 2048 DSP took: 1314.250000 us / 315420 ticks
+
   notPrintedFor = 0;
   }
 }
