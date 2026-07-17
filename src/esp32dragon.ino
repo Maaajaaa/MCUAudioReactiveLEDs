@@ -64,7 +64,8 @@ static bool record_status = true;
 //needs to be twice as as large because it stores the numbers as complex numbers
 float fftInOut[FFT_SIZE*2];
 float window[FFT_SIZE];
-
+float phaseAngles[FFT_SIZE];
+float energies[FFT_SIZE];
 
 static const uint32_t sample_buffer_size = FFT_SLICE_SIZE;
 static signed short sampleBuffer[sample_buffer_size];
@@ -257,9 +258,14 @@ void runDSP(){
     return;
   }
 
-  ///TODO: calculate phase angles (needs  to happen here or before bit reveerse)
+  ///calculate phase angles and energies (needs  to happen here or before bit reveerse)
+  for(u16_t i = 0; i < FFT_SLICE_SIZE; i++){
+    phaseAngles[i] = atan2f(fftInOut[i],fftInOut[i * 2]);
+    ///TODO: log-ging
+    energies[i] = sqrtf(fftInOut[i]*fftInOut[i] + fftInOut[i * 2] * fftInOut[i * 2]);
+  }
   
-  // Convert one complex vector with length N/2 to one real spectrum vector with length N/2
+  //Convert one complex vector with length N/2 to one real spectrum vector with length N/2
   ret = dsps_cplx2real_fc32(fftInOut, FFT_SIZE);
   if (ret  != ESP_OK) {
     Serial.printf("FAILED to run dsps_cplx2real_fc32. Error = %i", ret);
@@ -267,6 +273,25 @@ void runDSP(){
   }
 
   unsigned int end_dsp = dsp_get_cpu_cycle_count();
+
+  Serial.print("Phase angles:");
+  for(int i = 0; i < 15; i++){
+    Serial.printf("%.1f Hz: %.2f; ", (i+1)*float(SAMPLE_RATE)/(float)(FFT_SIZE), phaseAngles[i]);
+  }
+
+  Serial.print("\nEnergies:");
+  for(int i = 0; i < 15; i++){
+    Serial.printf("%.1f Hz: %.2f; ", (i+1)*float(SAMPLE_RATE)/(float)(FFT_SIZE), energies[i]);
+  }
+
+  Serial.print("\nReal vals:");
+  for(int i = 0; i < 15; i++){
+    Serial.printf("%.1f Hz: %.2f; ", (i+1)*float(SAMPLE_RATE)/(float)(FFT_SIZE), fftInOut[i]);
+  }
+
+  Serial.println();
+  Serial.println();
+
   notPrintedFor++;
   if(notPrintedFor > 20){
   Serial.printf("DSP took: %f us / %i ticks\n", (end_dsp - start_dsp) /240.0, (end_dsp - start_dsp) );
@@ -274,10 +299,10 @@ void runDSP(){
   //using FFT4R @ 4096 DSP took: 2036.950000 us / 488868 ticks
 
   //using FFT2R @ 256 DSP DSP took: 138.216667 us / 33172 ticks
-  //using FFT2R @ 4096 DSP took: 2775.645833 us / 666155 ticks
   //using FFT2R @ 512 DSP took: 293.220833 us / 70373 ticks
   //using FFT2R @ 1024 DSP took: 616.895833 us / 148055 ticks
   //using FFT2R @ 2048 DSP took: 1314.250000 us / 315420 ticks
+  //using FFT2R @ 4096 DSP took: 2775.645833 us / 666155 ticks
 
   notPrintedFor = 0;
   }
@@ -620,6 +645,9 @@ static void microphone_inference_end(void) {
   i2s_deinit();
   free(captureBuf.buffers[0]);
   free(captureBuf.buffers[1]);
+  //also deint fft stuff, as that's no good without data
+  dsps_fft4r_deinit_fc32();
+  dsps_fft2r_deinit_fc32();
 }
 
 
