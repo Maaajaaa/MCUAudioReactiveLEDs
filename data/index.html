@@ -1,0 +1,122 @@
+<!DOCTYPE HTML><html>
+<!-- Rui Santos - Complete project details at https://RandomNerdTutorials.com
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software. -->
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script
+src="/chart.js@4.5.0">
+</script>
+  <style>
+    body {
+      min-width: 310px;
+    	max-width: 800px;
+    	height: 400px;
+      margin: 0 auto;
+    }
+    h2 {
+      font-family: Arial;
+      font-size: 2.5rem;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h2>ESP Weather Station</h2>
+  <div style="width: 600px; margin: auto;">
+      <canvas id="myBarChart"></canvas>
+  </div>
+</body>
+
+
+<script>
+
+// Select the canvas element
+const ctx = document.getElementById('myBarChart').getContext('2d');
+
+// Create the bar graph
+const myBarChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+        labels: ['January', 'February', 'March', 'April', 'May'], // X-Axis
+        datasets: [{
+            label: 'Sales ($)',
+            data: [65, 59, 80, 81, 56], // Y-Axis values
+            backgroundColor: 'rgba(75, 192, 192, 0.2)', // Bar color
+            borderColor: 'rgba(75, 192, 192, 1)', // Border color
+            borderWidth: 1
+        }]
+    },
+    options: {
+        animation: false,
+        responsive: true,
+        scales: {
+            y: {
+                beginAtZero: true,
+                max: 4096
+            }
+        }
+    }
+});
+
+setInterval(function ( ) {
+  var xhttp = new XMLHttpRequest();
+  xhttp.onreadystatechange = function() {
+    if (this.readyState == 4 && this.status == 200) {
+      var x = (new Date()).getTime(),
+          y = parseFloat(this.responseText);
+      //console.log(this.responseText);
+      myBarChart.data.datasets[0].data[0] = this.responseText;
+      myBarChart.update();
+    }
+  };
+  xhttp.open("GET", "/temperature", true);
+  xhttp.send();
+}, 1000000000 ) ; //50ms would be 20 updates per secondW
+
+// Replace with your ESP32's actual IP address
+const espIP = window.location.hostname //"192.168.1.50"; 
+const wsUri = `ws://${espIP}/ws`;
+let websocket;
+
+function initWebSocket() {
+    console.log("Opening persistent TCP connection...");
+    websocket = new WebSocket(wsUri);
+    
+    websocket.onopen = function(event) {
+        console.log("Connected! Latency penalty is now 0ms.");
+    };
+    
+    websocket.onclose = function(event) {
+        console.log("Connection closed. Reconnecting in 2 seconds...");
+        setTimeout(initWebSocket, 2000); // Auto-reconnect safety
+    };
+    
+    // This triggers instantly (1-3ms) when the ESP32 calls ws.textAll()
+    websocket.onmessage = function(event) {
+        let sensorValue = event.data;
+        //console.log("Real-time data:", sensorValue);
+        myBarChart.data.datasets[0].data[0] = sensorValue;
+        myBarChart.update();
+        // Update your UI or chart here
+    };
+
+    websocket.onerror = function(error) {
+        console.error("WebSocket Error:", error);
+    };
+}
+
+// Call this when your web page loads
+window.addEventListener('load', initWebSocket);
+
+// Function to send data back to the ESP32 instantly
+function sendDataToESP32(message) {
+    if (websocket.readyState === WebSocket.OPEN) {
+        websocket.send(message); // Flies across the open socket with no handshake
+    }
+}
+</script>
+</html>

@@ -36,6 +36,19 @@
 #include "driver/i2s.h"
 #include "esp_dsp.h"
 
+//for web server
+#include <WiFi.h>
+#include <ESPAsyncWebServer.h>
+#include <secrets.h>
+#include <LittleFS.h>
+
+// Create AsyncWebServer object on port 80
+AsyncWebServer server(80);
+
+// Create a WebSocket object on the "/ws" endpoint
+AsyncWebSocket ws("/ws");
+
+/// TODO: shouldn't this be inited with false?
 static bool record_status = true;
 
 bool debug_dsp = false;
@@ -154,7 +167,11 @@ RGBColour pixelArray[NUMPIXELS];
 RGBColour pixelArrayOld[NUMPIXELS];
 
 void stripBootAnimation();
+// Handle incoming WebSocket events
+void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len);
 
+void initNetworkFeaturesBlocking();
+void updateServerData();
 /**
  * @brief      Arduino setup function
  */
@@ -173,6 +190,8 @@ void setup() {
   //initialize and test neoPixel
 
   stripBootAnimation();
+
+  initNetworkFeaturesBlocking();
 
   Serial.println("Boot animation finished");
   delay(2 * 1000); 
@@ -220,6 +239,9 @@ void loop() {
 
   //show the output
   displayAnimation();
+
+  //send data to connected clients
+  updateServerData();
 }
 
 void runDSP(){
@@ -263,23 +285,23 @@ void runDSP(){
   unsigned int end_dsp = dsp_get_cpu_cycle_count();
 
   if(debug_dsp){
-  Serial.print("Phase angles:");
-  for(int i = 0; i < 15; i++){
-    Serial.printf("%.1f Hz: %.2f; ", (i+1)*float(SAMPLE_RATE)/(float)(FFT_SIZE), phaseAngles[i]);
-  }
+    Serial.print("Phase angles:");
+    for(int i = 0; i < 15; i++){
+      Serial.printf("%.1f Hz: %.2f; ", (i+1)*float(SAMPLE_RATE)/(float)(FFT_SIZE), phaseAngles[i]);
+    }
 
-  Serial.print("\nEnergies:");
-  for(int i = 0; i < 15; i++){
-    Serial.printf("%.1f Hz: %.2f; ", (i+1)*float(SAMPLE_RATE)/(float)(FFT_SIZE), energies[i]);
-  }
+    Serial.print("\nEnergies:");
+    for(int i = 0; i < 15; i++){
+      Serial.printf("%.1f Hz: %.2f; ", (i+1)*float(SAMPLE_RATE)/(float)(FFT_SIZE), energies[i]);
+    }
 
-  Serial.print("\nReal vals:");
-  for(int i = 0; i < 15; i++){
-    Serial.printf("%.1f Hz: %.2f; ", (i+1)*float(SAMPLE_RATE)/(float)(FFT_SIZE), fftInOut[i]);
-  }
+    Serial.print("\nReal vals:");
+    for(int i = 0; i < 15; i++){
+      Serial.printf("%.1f Hz: %.2f; ", (i+1)*float(SAMPLE_RATE)/(float)(FFT_SIZE), fftInOut[i]);
+    }
 
-  Serial.println();
-  Serial.println();
+    Serial.println();
+    Serial.println();
   }
 
 
@@ -746,4 +768,72 @@ float updateRollingAverage(float newVal) {
   rollingPeakAvg -= rollingPeakAvg / ravSamplesize;
   rollingPeakAvg += newVal / ravSamplesize;
   return rollingPeakAvg;
+}
+
+// Handle incoming WebSocket events
+void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t len) {
+    if (type == WS_EVT_CONNECT) {
+        Serial.printf("Browser connected! Client ID: %u\n", client->id());
+    } 
+    else if (type == WS_EVT_DISCONNECT) {
+        Serial.printf("Browser disconnected! Client ID: %u\n", client->id());
+    } 
+    else if (type == WS_EVT_DATA) {
+        // Handle data sent from the browser to the ESP32 here
+        Serial.printf("Received data from browser: %s\n", (char*)data);
+    }
+}
+
+void initNetworkFeaturesBlocking(){
+    // Initialize LittleFS
+  if(!LittleFS.begin()){
+    Serial.println("An Error has occurred while mounting LittleFS");
+        return;
+  }
+
+  // Connect to Wi-Fi
+  WiFi.setSleep(false); //gemini said keeping power save on can introduce jitter
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi..");
+  }
+
+  // Print ESP32 Local IP Address
+  Serial.println(WiFi.localIP());
+
+  // Attach the event handler to the WebSocket object
+  ws.onEvent(onWsEvent);
+  // Register the WebSocket handler to the web server
+  server.addHandler(&ws);
+
+  // Route for root / web page
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->send(LittleFS, "/index.html");
+  });
+  server.on("/chart.js@4.5.0", HTTP_GET, [](AsyncWebServerRequest *request){
+  AsyncWebServerResponse *response = request->beginResponse(200, "text/html");
+  response->addHeader("Content-Encoding", "gzip");
+  request->send(LittleFS, "/chart.js@4.5.0", "text/html", false);
+  });
+  server.on("/temperature", HTTP_GET, [](AsyncWebServerRequest *request){
+    request->client()->setNoDelay(true);
+    request->send(200, "text/plain", String(energies[0]));
+  });
+
+  // Start server
+  server.begin();
+}
+
+void updateServerData(){
+  //send data to ALL connected clients
+  unsigned int start_ticks = dsp_get_cpu_cycle_count();
+  //Only send if someone is actually connected
+  if (ws.count() > 0) {
+      String payload = String(energies[0]);
+      ws.textAll(payload); // Sends data instantly over the open TCP pipe
+  }
+  unsigned int end_ticks = dsp_get_cpu_cycle_count();
+
+  Serial.printf("Server update took: %f us / %i ticks\n", (end_ticks - start_ticks) /240.0, (end_ticks - start_ticks) );
 }
