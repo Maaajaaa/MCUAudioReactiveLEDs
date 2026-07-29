@@ -830,8 +830,14 @@ void updateServerData(){
   unsigned int start_ticks = dsp_get_cpu_cycle_count();
   //Only send if someone is actually connected
   if (ws.count() > 0) {
+      //1400 bytes is a good place to start for max packet size, so 1333 byes payload seems fair, that's 166 uint8_t symbols
+      //that takes 2.6-3.2 ms in fine conditions, with bad reception and lost packets that can probalby increase a lot however
+      char str[166] = "";
+      for(int i = 0; i < 166; i++){
+        str[i] = i;
+      }
       String payload = String(energies[0]);
-      ws.textAll(payload); // Sends data instantly over the open TCP pipe
+      ws.binaryAll(str, 166); // Sends data over the open TCP pipe
   }
   unsigned int end_ticks = dsp_get_cpu_cycle_count();
 
