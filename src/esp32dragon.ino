@@ -38,6 +38,8 @@
 
 static bool record_status = true;
 
+bool debug_dsp = false;
+
 /******New FFT stuff ------------------------------------------------------------ */
 
 #define FFT_SIZE 2048 //needs to be base 4 so we can use radix-4 fft, so next would be 4096
@@ -260,6 +262,7 @@ void runDSP(){
 
   unsigned int end_dsp = dsp_get_cpu_cycle_count();
 
+  if(debug_dsp){
   Serial.print("Phase angles:");
   for(int i = 0; i < 15; i++){
     Serial.printf("%.1f Hz: %.2f; ", (i+1)*float(SAMPLE_RATE)/(float)(FFT_SIZE), phaseAngles[i]);
@@ -277,6 +280,8 @@ void runDSP(){
 
   Serial.println();
   Serial.println();
+  }
+
 
   notPrintedFor++;
   if(notPrintedFor > 20){
