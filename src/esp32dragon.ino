@@ -35,22 +35,8 @@
 
 #include "driver/i2s.h"
 #include "esp_dsp.h"
-//#include <DSPforAudioReactiveMCU.h>
 
-//static bool debug_nn = false;  // Set this to true to see e.g. features generated from the raw signal
 static bool record_status = true;
-
-
-// //size needed for the mfcc buffer, seems to report just 1 x num filters
-// matrix_size_t mfe_buffer_size = speechpy::feature::calculate_mfe_buffer_size(
-//   EI_CLASSIFIER_SLICE_SIZE,
-//   EI_CLASSIFIER_FREQUENCY,
-//   ei_dsp_config_4.frame_length,
-//   ei_dsp_config_4.frame_stride,
-//   ei_dsp_config_4.num_filters,
-//   ei_dsp_config_4.implementation_version);
-
-// ei::matrix_t outputMatrix(1, EI_CLASSIFIER_NN_INPUT_FRAME_SIZE);
 
 /******New FFT stuff ------------------------------------------------------------ */
 
@@ -309,16 +295,6 @@ void runDSP(){
 }
 
 void displayAnimation() {
-
-  // signal_t signal;
-  // signal.total_length = FFT_SLICE_SIZE;
-  // signal.get_data = &microphone_audio_signal_get_data;
-  // ei_impulse_result_t result = { 0 };
-
-  // if (!fftInOut) {
-  //   Serial.printf("allocation of output matrix failed\n");
-  // }
-  // run_mfe_maaajaaa(&signal, &outputMatrix, debug_nn);
 
   double rMax = -100.0;
   int rMaxIndex = -1;
@@ -628,15 +604,6 @@ static bool waitUntilCaptureBufferFull(void) {
   captureBuf.selectedBufferReady = 0;
   return true;
 }
-
-/**
- * Get raw audio signal data
- */
-// static int microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr) {
-//   numpy::int16_to_float(&captureBuf.buffers[captureBuf.selectedBufferIndex ^ 1][offset], out_ptr, length);
-
-//   return 0;
-// }
 
 /**
  * @brief      Stop PDM and release buffers
