@@ -52,10 +52,10 @@ AsyncWebSocket ws("/ws");
 static bool record_status = true;
 
 bool debug_dsp = false;
-
+bool debug_filterbank_outputs = false;
 /******New FFT stuff ------------------------------------------------------------ */
 
-#define FFT_SIZE 2048 //needs to be base 4 so we can use radix-4 fft, so next would be 4096
+#define FFT_SIZE 1024// was 2048 for testing //needs to be base 4 so we can use radix-4 fft, so next would be 4096
 #define SAMPLE_RATE 50000
 #define FFT_BIN_SPACING SAMPLE_RATE/FFT_SIZE
 #define FFT_SLICE_SIZE FFT_SIZE//1024//800 is 20 fft runs per second;
@@ -90,12 +90,12 @@ static bool record_ready = false;
 
 
 //needs to be divisable by 2 with remainder 1 for symmetric cascading
-#define NUMPIXELS 27//135// 23+ 17+ 13+ 20+ 23+ 17+ 19+ 3
+#define NUMPIXELS 247//1e35// 23+ 17+ 13+ 20+ 23+ 17+ 19+ 3
 int tentacles[] = { 23, 17, 13, 20, 23, 17, 19, 3};
 int numTentacles = 8;
 #define PIN_NEO_PIXEL 4  //pin 2 can cause issues with some voltage converter boards (esp won't go into flashing mode) (maybe a small pull down resistor would mitigate this)
-NeoPixelBus<NeoRgbwFeature, NeoEsp32I2s0Sk6812Method> strip(NUMPIXELS, PIN_NEO_PIXEL);
-
+//NeoPixelBus<NeoRgbwFeature, NeoEsp32I2s0Sk6812Method> strip(NUMPIXELS, PIN_NEO_PIXEL);
+NeoPixelBus<NeoGrbFeature, NeoEsp32I2s0Ws2812xMethod> strip(NUMPIXELS, PIN_NEO_PIXEL);
 
 
 /* GRAPH PLOTTING (no Arduino IDE and cutecom support, only puttY confimred so far)--------------------------------------*/
@@ -113,7 +113,7 @@ int ceptrumToShow = 0;
 
 
 float alphaLowPass = 0.6;
-static bool debug_arduino_filtering = false;
+static bool debug_arduino_filtering = true;
 
 /* Gaussian Filter ------------------------------------------------------------- */
 
@@ -191,7 +191,7 @@ void setup() {
 
   stripBootAnimation();
 
-  initNetworkFeaturesBlocking();
+  //initNetworkFeaturesBlocking();
 
   Serial.println("Boot animation finished");
   delay(2 * 1000); 
@@ -241,7 +241,7 @@ void loop() {
   displayAnimation();
 
   //send data to connected clients
-  updateServerData();
+  //updateServerData();
 }
 
 void runDSP(){
@@ -271,8 +271,8 @@ void runDSP(){
   ///calculate phase angles and energies (needs  to happen here or before bit reveerse)
   for(u16_t i = 0; i < FFT_SLICE_SIZE; i++){
     phaseAngles[i] = atan2f(fftInOut[i],fftInOut[i * 2]);
-    ///TODO: log-ging
-    energies[i] = sqrtf(fftInOut[i]*fftInOut[i] + fftInOut[i * 2] * fftInOut[i * 2]);
+    ///TODO: verif log-ging
+    energies[i] = /*logf*/(sqrtf(fftInOut[i*2]*fftInOut[i*2] + fftInOut[i*2 + 1] * fftInOut[i*2 + 1]));
   }
   
   //Convert one complex vector with length N/2 to one real spectrum vector with length N/2
@@ -336,8 +336,8 @@ void displayAnimation() {
   int relevantBuferCols = FFT_SIZE;
 
   int firstThird, secondThird;
-  firstThird = 3;
-  secondThird = 5;
+  firstThird = 12;
+  secondThird = 70;
 
 
   //print graph, can't be viewed in arduino viewer, but putty or cutecom do support the clear screen command
@@ -352,41 +352,42 @@ void displayAnimation() {
     //Serial.print("output: ");
   }
   //intersting output is at the end of the matrix, see ei_run_dsp.h:833
-  if(debug_arduino_filtering) Serial.print("\n\nData: ");
+  if(debug_filterbank_outputs) Serial.print("\n\nData: ");
 
-  for (int i = FFT_SIZE - relevantBuferCols; i < FFT_SIZE; i++) {
-    if(debug_arduino_filtering) Serial.printf("%5.2f ", log(fftInOut[i]));
-    if(fftInOut[i] > maxOf4s[i%8]){
-      maxOf4s[i%8] = fftInOut[i];
+  for (int i = 0; i < FFT_SIZE; i++) {
+    float visualsVal = energies[i];
+    if(debug_filterbank_outputs) Serial.printf("%5.2f ", visualsVal);
+    if(visualsVal > maxOf4s[i%8]){
+      maxOf4s[i%8] = visualsVal;
     }
     //find maxima of the thrids of the spectrum
     if (i < firstThird) {
-      if (fftInOut[i] > rMax) {
-        rMax = fftInOut[i];
+      if (visualsVal > rMax) {
+        rMax = visualsVal;
         rMaxIndex = i;
       }
     } else if (i < secondThird) {
-      if (fftInOut[i] > gMax) {
-        gMax = fftInOut[i];
+      if (visualsVal > gMax) {
+        gMax = visualsVal;
         gMaxIndex = i;
       }
     } else {
-      if (fftInOut[i] > bMax) {
-        bMax = fftInOut[i];
+      if (visualsVal > bMax) {
+        bMax = visualsVal;
         bMaxIndex = i;
       }
     }
 
     //print graph bar
     if (printGraph && nonPrintCycles >= printEvery) {
-      for (int j = 0; j < round(graphMaxLength * fftInOut[i]); j++) {
+      for (int j = 0; j < round(graphMaxLength * visualsVal); j++) {
         Serial.print("▮");
       }
       Serial.println();
     }
     if (i == ceptrumToShow && outputMode == SINGLE_CEPTRUM) {
       for (int j = 0; j < NUMPIXELS; j++) {
-        if (j <= round(NUMPIXELS * fftInOut[i])) {
+        if (j <= round(NUMPIXELS * visualsVal)) {
           strip.SetPixelColor(j,RgbColor(255, 0, 0));
           //pixels.setPixelColor(j, 255, 0, 0);
         } else {
@@ -406,9 +407,15 @@ void displayAnimation() {
   }
 
   //calculate new 8-bit rbg values, assuming mfcc output is normed to 0..1
-  uint8_t rNew = static_cast<uint8_t>((20.0 + log(rMax)) * inputScalar);
-  uint8_t gNew = static_cast<uint8_t>((20.0 + log(gMax)) * inputScalar);
-  uint8_t bNew = static_cast<uint8_t>((20.0 + log(bMax)) * inputScalar);
+  uint8_t rNew = static_cast<uint8_t>((powf(rMax,2.3)/100) * inputScalar);
+  uint8_t gNew = static_cast<uint8_t>((powf(gMax, 2.3)/100) * inputScalar);
+  uint8_t bNew = static_cast<uint8_t>((powf(bMax, 2.3)/100) * inputScalar);
+
+/*  if(rNew + bNew + gNew > 180 * 3){
+    rNew/= 10;
+    gNew/= 10;
+    bNew/= 10;
+  }*/
 
   ///TODO: Figure out what this was intended for and if we need it maybe
   // if (rMax < 0.4) {
@@ -423,7 +430,7 @@ void displayAnimation() {
 
   if (!printGraph && debug_arduino_filtering) {
 
-    Serial.print("new rgb: ");
+    Serial.print("\nnew rgb: ");
     Serial.print(rNew);
     Serial.print(" ");
     Serial.print(gNew);
@@ -500,9 +507,6 @@ void displayAnimation() {
   // Send the updated pixel colors to the hardware.
   strip.Show();
 
-  /*------------gain adjustment--------------------------------------*/
-  //add new values to rolling average
-  updateRollingAverage(sqrt(rNew*rNew + gNew*gNew + bNew*bNew));
 
   /*Serial.print("Rolling average: ");
   Serial.print(rollingPeakAvg);
