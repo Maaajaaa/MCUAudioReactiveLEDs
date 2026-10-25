@@ -34,6 +34,7 @@
 #include "freertos/task.h"
 
 #include "driver/i2s.h"
+//#warning "This set of I2S APIs has been deprecated, please include 'driver/i2s_std.h', 'driver/i2s_pdm.h' or 'driver/i2s_tdm.h' instead. if
 #include "esp_dsp.h"
 
 //for web server
@@ -93,7 +94,7 @@ static bool record_ready = false;
 #define NUMPIXELS 247//1e35// 23+ 17+ 13+ 20+ 23+ 17+ 19+ 3
 int tentacles[] = { 23, 17, 13, 20, 23, 17, 19, 3};
 int numTentacles = 8;
-#define PIN_NEO_PIXEL 4  //pin 2 can cause issues with some voltage converter boards (esp won't go into flashing mode) (maybe a small pull down resistor would mitigate this)
+#define PIN_NEO_PIXEL 2  //pin 2 can cause issues with some voltage converter boards (esp won't go into flashing mode) (maybe a small pull down resistor would mitigate this)
 //NeoPixelBus<NeoRgbwFeature, NeoEsp32I2s0Sk6812Method> strip(NUMPIXELS, PIN_NEO_PIXEL);
 NeoPixelBus<NeoGrbFeature, NeoEsp32I2s0Ws2812xMethod> strip(NUMPIXELS, PIN_NEO_PIXEL);
 
